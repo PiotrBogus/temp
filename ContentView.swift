@@ -31,48 +31,81 @@ struct MonthGroup: Comparable {
 }
 
 
+
+
 func organizeDatesIntoMonthWeekDayGroups(dates: [Date]) -> [MonthGroup] {
     let calendar = Calendar.current
     let sortedDates = dates.sorted()
+    let inputDateSet = Set(sortedDates) // For quick lookup to see which dates were in the original array
 
-    // Temporary dictionary: [ "YYYY-MM" : [ weekOfMonth : [Date] ] ]
-    var monthWeekMap: [String: (year: Int, month: Int, weeks: [Int: [Date]])] = [:]
+    // Step 1: Identify all unique months present in the input dates
+    var monthsSet = Set<String>()
+    var monthComponentsList: [(year: Int, month: Int)] = []
 
     for date in sortedDates {
-        let comps = calendar.dateComponents([.year, .month, .weekOfMonth], from: date)
-
-        guard let year = comps.year,
-              let month = comps.month,
-              let weekOfMonth = comps.weekOfMonth else { continue }
-
-        let monthKey = String(format: "%04d-%02d", year, month)
-
-        if monthWeekMap[monthKey] == nil {
-            monthWeekMap[monthKey] = (year, month, [:])
+        let comps = calendar.dateComponents([.year, .month], from: date)
+        if let year = comps.year, let month = comps.month {
+            let key = String(format: "%04d-%02d", year, month)
+            // Avoid duplicates by using a set
+            if !monthsSet.contains(key) {
+                monthsSet.insert(key)
+                monthComponentsList.append((year, month))
+            }
         }
-
-        if monthWeekMap[monthKey]!.weeks[weekOfMonth] == nil {
-            monthWeekMap[monthKey]!.weeks[weekOfMonth] = []
-        }
-
-        monthWeekMap[monthKey]!.weeks[weekOfMonth]?.append(date)
     }
 
-    // Transform to structured MonthGroup → WeekGroup → DayGroup
     var result: [MonthGroup] = []
 
-    for (_, (year, month, weeksDict)) in monthWeekMap {
-        var weekGroups: [WeekGroup] = []
-
-        for (weekNumber, datesInWeek) in weeksDict {
-            let dayGroups = datesInWeek.sorted().map { DayGroup(date: $0) }
-            weekGroups.append(WeekGroup(weekOfMonth: weekNumber, days: dayGroups))
+    // Step 2: Process each month
+    for (year, month) in monthComponentsList {
+        // Create a date for the first day of the month
+        var components = DateComponents(year: year, month: month, day: 1)
+        guard let startOfMonth = calendar.date(from: components),
+              let range = calendar.range(of: .day, in: .month, for: startOfMonth) else {
+            continue // Skip if date construction fails
         }
 
+        // Step 3: Generate all dates for the month (1st to last day)
+        var allDays: [Date] = []
+        for day in range {
+            components.day = day
+            if let date = calendar.date(from: components) {
+                allDays.append(date)
+            }
+        }
+
+        // Step 4: Group dates by week of the month
+        var weekMap: [Int: [DayGroup]] = [:]
+
+        for date in allDays {
+            let weekOfMonth = calendar.component(.weekOfMonth, from: date)
+            let isOriginal = inputDateSet.contains(date) // Determine if this date was in the original input
+            let dayGroup = DayGroup(date: date, isOriginal: isOriginal)
+
+            // Append to the correct week bucket
+            if weekMap[weekOfMonth] == nil {
+                weekMap[weekOfMonth] = []
+            }
+
+            weekMap[weekOfMonth]?.append(dayGroup)
+        }
+
+        // Step 5: Convert week map into sorted WeekGroup objects
+        var weekGroups: [WeekGroup] = []
+        for (weekNum, dayGroups) in weekMap {
+            // Sort days within the week
+            let sortedDays = dayGroups.sorted(by: { $0.date < $1.date })
+            weekGroups.append(WeekGroup(weekOfMonth: weekNum, days: sortedDays))
+        }
+
+        // Sort weeks within the month
         weekGroups.sort()
 
-        result.append(MonthGroup(year: year, month: month, weeks: weekGroups))
+        // Step 6: Construct the MonthGroup and add it to result
+        let monthGroup = MonthGroup(year: year, month: month, weeks: weekGroups)
+        result.append(monthGroup)
     }
 
+    // Step 7: Sort all months chronologically
     return result.sorted()
 }
