@@ -319,3 +319,113 @@ private struct MonthOffsetPreferenceKey: PreferenceKey {
     )
 }
 
+
+
+
+
+
+
+
+import SwiftUI
+import ComposableArchitecture
+
+struct DatePickerView: View {
+    @SwiftUI.Environment(\.verticalSizeClass) private var verticalSizeClass: UserInterfaceSizeClass?
+
+    enum Constants {
+        static let dayViewPickerHeight: CGFloat = 60
+        static let monthViewPickerHeight: CGFloat = 400
+    }
+
+    var store: StoreOf<DatePickerFeature>
+    var onDragChanged: ((CGFloat) -> Void)?
+
+    @State private var verticalDragOffset: CGFloat = Constants.dayViewPickerHeight
+
+    public init(
+        store: StoreOf<DatePickerFeature>,
+        onDragChanged: ((CGFloat) -> Void)? = nil
+    ) {
+        self.store = store
+        self.onDragChanged = onDragChanged
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.white.opacity(0).ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                Capsule()
+                    .fill(Color.textLightGray)
+                    .frame(width: 40, height: 4)
+                    .padding(.top, 12)
+
+                VStack {
+                    switch store.calendarType {
+                    case .day:
+                        DatePickerDaysLayoutView(
+                            store: store.scope(
+                                state: \.datePickerDaysLayoutFeature,
+                                action: \.datePickerDaysLayoutFeature
+                            )
+                        )
+                    case .month:
+                        DatePickerMonthsLayoutView(
+                            store: store.scope(
+                                state: \.datePickerMonthsLayoutFeature,
+                                action: \.datePickerMonthsLayoutFeature
+                            )
+                        )
+                    }
+                }
+                .frame(height: verticalDragOffset)
+                .clipped()
+            }
+            .background(
+                UnevenRoundedRectangle(
+                    cornerRadii: .init(topLeading: 16, topTrailing: 16)
+                )
+                .fill(.white)
+                .ignoresSafeArea()
+                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: -4)
+            )
+            .gesture(
+                DragGesture(minimumDistance: 10)
+                    .onChanged { value in
+                        verticalDragOffset -= value.translation.height
+                        verticalDragOffset = max(Constants.dayViewPickerHeight,
+                                                 min(Constants.monthViewPickerHeight, verticalDragOffset))
+
+                        let newType: DatePickerFeature.State.CalendarType =
+                            verticalDragOffset <= Constants.dayViewPickerHeight + 100 ? .day : .month
+                        store.send(.calendarTypeChanged(newType))
+                        onDragChanged?(verticalDragOffset)
+                    }
+                    .onEnded { _ in
+                        withAnimation {
+                            verticalDragOffset =
+                                verticalDragOffset > Constants.monthViewPickerHeight / 3
+                                ? Constants.monthViewPickerHeight
+                                : Constants.dayViewPickerHeight
+                        } completion: {
+                            let newType: DatePickerFeature.State.CalendarType =
+                                verticalDragOffset <= Constants.dayViewPickerHeight + 100 ? .day : .month
+                            store.send(.calendarTypeChanged(newType))
+                        }
+                        onDragChanged?(verticalDragOffset)
+                    }
+            )
+        }
+        .frame(maxHeight: .infinity, alignment: .bottom)
+        .ignoresSafeArea(edges: .bottom)
+    }
+}
+
+#Preview {
+    DatePickerView(
+        store: Store(initialState: DatePickerFeature.State()) {
+            DatePickerFeature()
+        }
+    )
+}
+
