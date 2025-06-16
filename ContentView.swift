@@ -1,11 +1,3 @@
-//
-//  DatePickerView.swift
-//  BPAGenieV2
-//
-//  Created by Daniel Satin on 20.03.2025.
-//  Copyright © 2025 Novartis. All rights reserved.
-//
-
 import SwiftUI
 import ComposableArchitecture
 
