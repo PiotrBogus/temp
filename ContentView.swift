@@ -534,3 +534,87 @@ private extension WatchlistDataFormat6RefactoredViewController {
         static let aiBannerMinButtonWith: CGFloat = 110
     }
 }
+
+
+
+
+Unable to simultaneously satisfy constraints.
+	Probably at least one of the constraints in the following list is one you don't want. 
+	Try this: 
+		(1) look at each constraint and try to figure out which you don't expect; 
+		(2) find the code that added the unwanted constraint or constraints and fix it. 
+(
+    "<NSLayoutConstraint:0x60000245b7f0 H:|-(5)-[UIStackView:0x128e0aad0]   (active, names: '|':WatchlistResidentialUI.HeaderButtonView:0x1294c6db0 )>",
+    "<NSLayoutConstraint:0x60000245bed0 UIStackView:0x128e0aad0.trailing == WatchlistResidentialUI.HeaderButtonView:0x1294c6db0.trailing - 5   (active)>",
+    "<NSLayoutConstraint:0x6000061159a0 'fittingSizeHTarget' UIStackView:0x127a5ce40.width == 0   (active)>",
+    "<NSLayoutConstraint:0x6000025fc320 'UISV-canvas-connection' UIStackView:0x127a5ce40.leading == WatchlistResidentialUI.HeaderButtonView:0x1294c6db0.leading   (active)>",
+    "<NSLayoutConstraint:0x6000025fce60 'UISV-canvas-connection' H:[WatchlistResidentialUI.HeaderButtonView:0x1294d49b0]-(0)-|   (active, names: '|':UIStackView:0x127a5ce40 )>",
+    "<NSLayoutConstraint:0x6000025fc690 'UISV-fill-equally' WatchlistResidentialUI.HeaderButtonView:0x1294d49b0.width == WatchlistResidentialUI.HeaderButtonView:0x1294c6db0.width   (active)>",
+    "<NSLayoutConstraint:0x6000025fcaa0 'UISV-spacing' H:[WatchlistResidentialUI.HeaderButtonView:0x1294c6db0]-(0)-[WatchlistResidentialUI.HeaderButtonView:0x1294d49b0]   (active)>"
+)
+
+Will attempt to recover by breaking constraint 
+<NSLayoutConstraint:0x60000245bed0 UIStackView:0x128e0aad0.trailing == WatchlistResidentialUI.HeaderButtonView:0x1294c6db0.trailing - 5   (active)>
+
+Make a symbolic breakpoint at UIViewAlertForUnsatisfiableConstraints to catch this in the debugger.
+The methods in the UIConstraintBasedLayoutDebugging category on UIView listed in <UIKitCore/UIView.h> may also be helpful.
+Unable to simultaneously satisfy constraints.
+	Probably at least one of the constraints in the following list is one you don't want. 
+	Try this: 
+		(1) look at each constraint and try to figure out which you don't expect; 
+		(2) find the code that added the unwanted constraint or constraints and fix it. 
+(
+    "<NSLayoutConstraint:0x60000258cd20 H:|-(5)-[UIStackView:0x128ebc960]   (active, names: '|':WatchlistResidentialUI.HeaderButtonView:0x1294d49b0 )>",
+    "<NSLayoutConstraint:0x600002597390 UIStackView:0x128ebc960.trailing == WatchlistResidentialUI.HeaderButtonView:0x1294d49b0.trailing - 5   (active)>",
+    "<NSLayoutConstraint:0x6000061159a0 'fittingSizeHTarget' UIStackView:0x127a5ce40.width == 0   (active)>",
+    "<NSLayoutConstraint:0x6000025fc320 'UISV-canvas-connection' UIStackView:0x127a5ce40.leading == WatchlistResidentialUI.HeaderButtonView:0x1294c6db0.leading   (active)>",
+    "<NSLayoutConstraint:0x6000025fce60 'UISV-canvas-connection' H:[WatchlistResidentialUI.HeaderButtonView:0x1294d49b0]-(0)-|   (active, names: '|':UIStackView:0x127a5ce40 )>",
+    "<NSLayoutConstraint:0x6000025fc690 'UISV-fill-equally' WatchlistResidentialUI.HeaderButtonView:0x1294d49b0.width == WatchlistResidentialUI.HeaderButtonView:0x1294c6db0.width   (active)>",
+    "<NSLayoutConstraint:0x6000025fcaa0 'UISV-spacing' H:[WatchlistResidentialUI.HeaderButtonView:0x1294c6db0]-(0)-[WatchlistResidentialUI.HeaderButtonView:0x1294d49b0]   (active)>"
+)
+
+Will attempt to recover by breaking constraint 
+<NSLayoutConstraint:0x600002597390 UIStackView:0x128ebc960.trailing == WatchlistResidentialUI.HeaderButtonView:0x1294d49b0.trailing - 5   (active)>
+
+Make a symbolic breakpoint at UIViewAlertForUnsatisfiableConstraints to catch this in the debugger.
+The methods in the UIConstraintBasedLayoutDebugging category on UIView listed in <UIKitCore/UIView.h> may also be helpful.
+Unable to simultaneously satisfy constraints.
+	Probably at least one of the constraints in the following list is one you don't want. 
+	Try this: 
+		(1) look at each constraint and try to figure out which you don't expect; 
+		(2) find the code that added the unwanted constraint or constraints and fix it. 
+(
+    "<NSLayoutConstraint:0x60000245b7f0 H:|-(5)-[UIStackView:0x128e0aad0]   (active, names: '|':WatchlistResidentialUI.HeaderButtonView:0x1294c6db0 )>",
+    "<NSLayoutConstraint:0x60000245bed0 UIStackView:0x128e0aad0.trailing == WatchlistResidentialUI.HeaderButtonView:0x1294c6db0.trailing - 5   (active)>",
+    "<NSLayoutConstraint:0x600006193d90 'fittingSizeHTarget' UIStackView:0x127a5ce40.width == 0   (active)>",
+    "<NSLayoutConstraint:0x6000025fc320 'UISV-canvas-connection' UIStackView:0x127a5ce40.leading == WatchlistResidentialUI.HeaderButtonView:0x1294c6db0.leading   (active)>",
+    "<NSLayoutConstraint:0x6000025fce60 'UISV-canvas-connection' H:[WatchlistResidentialUI.HeaderButtonView:0x1294d49b0]-(0)-|   (active, names: '|':UIStackView:0x127a5ce40 )>",
+    "<NSLayoutConstraint:0x6000025fc690 'UISV-fill-equally' WatchlistResidentialUI.HeaderButtonView:0x1294d49b0.width == WatchlistResidentialUI.HeaderButtonView:0x1294c6db0.width   (active)>",
+    "<NSLayoutConstraint:0x6000025fcaa0 'UISV-spacing' H:[WatchlistResidentialUI.HeaderButtonView:0x1294c6db0]-(0)-[WatchlistResidentialUI.HeaderButtonView:0x1294d49b0]   (active)>"
+)
+
+Will attempt to recover by breaking constraint 
+<NSLayoutConstraint:0x60000245bed0 UIStackView:0x128e0aad0.trailing == WatchlistResidentialUI.HeaderButtonView:0x1294c6db0.trailing - 5   (active)>
+
+Make a symbolic breakpoint at UIViewAlertForUnsatisfiableConstraints to catch this in the debugger.
+The methods in the UIConstraintBasedLayoutDebugging category on UIView listed in <UIKitCore/UIView.h> may also be helpful.
+Unable to simultaneously satisfy constraints.
+	Probably at least one of the constraints in the following list is one you don't want. 
+	Try this: 
+		(1) look at each constraint and try to figure out which you don't expect; 
+		(2) find the code that added the unwanted constraint or constraints and fix it. 
+(
+    "<NSLayoutConstraint:0x60000258cd20 H:|-(5)-[UIStackView:0x128ebc960]   (active, names: '|':WatchlistResidentialUI.HeaderButtonView:0x1294d49b0 )>",
+    "<NSLayoutConstraint:0x600002597390 UIStackView:0x128ebc960.trailing == WatchlistResidentialUI.HeaderButtonView:0x1294d49b0.trailing - 5   (active)>",
+    "<NSLayoutConstraint:0x600006193d90 'fittingSizeHTarget' UIStackView:0x127a5ce40.width == 0   (active)>",
+    "<NSLayoutConstraint:0x6000025fc320 'UISV-canvas-connection' UIStackView:0x127a5ce40.leading == WatchlistResidentialUI.HeaderButtonView:0x1294c6db0.leading   (active)>",
+    "<NSLayoutConstraint:0x6000025fce60 'UISV-canvas-connection' H:[WatchlistResidentialUI.HeaderButtonView:0x1294d49b0]-(0)-|   (active, names: '|':UIStackView:0x127a5ce40 )>",
+    "<NSLayoutConstraint:0x6000025fc690 'UISV-fill-equally' WatchlistResidentialUI.HeaderButtonView:0x1294d49b0.width == WatchlistResidentialUI.HeaderButtonView:0x1294c6db0.width   (active)>",
+    "<NSLayoutConstraint:0x6000025fcaa0 'UISV-spacing' H:[WatchlistResidentialUI.HeaderButtonView:0x1294c6db0]-(0)-[WatchlistResidentialUI.HeaderButtonView:0x1294d49b0]   (active)>"
+)
+
+Will attempt to recover by breaking constraint 
+<NSLayoutConstraint:0x600002597390 UIStackView:0x128ebc960.trailing == WatchlistResidentialUI.HeaderButtonView:0x1294d49b0.trailing - 5   (active)>
+
+Make a symbolic breakpoint at UIViewAlertForUnsatisfiableConstraints to catch this in the debugger.
+The methods in the UIConstraintBasedLayoutDebugging category on UIView listed in <UIKitCore/UIView.h> may also be helpful.
