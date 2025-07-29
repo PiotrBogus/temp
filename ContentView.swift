@@ -1,105 +1,81 @@
-private func organizeDatesIntoMonthWeekDayGroups(pickerDates: [PickerDate]) -> [CalendarMonth] {
-        let calendar = Calendar.current
-        let sortedPickerDates = pickerDates.sorted { $0.date < $1.date }
-        let inputDateSet = Set(sortedPickerDates) // For quick lookup to see which dates were in the original array
+import SwiftUI
 
-        // Step 1: Identify all unique months present in the input dates
-        var monthsSet = Set<String>()
-        var monthComponentsList: [(year: Int, month: Int)] = []
+// Model
+struct Tile: Identifiable {
+    let id: UUID
+    let title: String
+    let parentId: String
+}
 
-        for pickerDate in inputDateSet {
-            let comps = calendar.dateComponents([.year, .month], from: pickerDate.date)
-            if let year = comps.year, let month = comps.month {
-                let key = String(format: "%04d-%02d", year, month)
-                // Avoid duplicates by using a set
-                if !monthsSet.contains(key) {
-                    monthsSet.insert(key)
-                    monthComponentsList.append((year, month))
+// Sample Data
+let sampleTiles: [Tile] = [
+    Tile(id: UUID(), title: "Tile 1", parentId: "Group A"),
+    Tile(id: UUID(), title: "Tile 2", parentId: "Group A"),
+    Tile(id: UUID(), title: "Tile 3", parentId: "Group B"),
+    Tile(id: UUID(), title: "Tile 4", parentId: "Group B"),
+    Tile(id: UUID(), title: "Tile 5", parentId: "Group C"),
+    Tile(id: UUID(), title: "Tile 6", parentId: "Group C")
+]
+
+// Grouping by parentId
+func groupTiles(_ tiles: [Tile]) -> [String: [Tile]] {
+    Dictionary(grouping: tiles, by: { $0.parentId })
+}
+
+// Dashboard View
+struct DashboardView: View {
+    let groupedTiles = groupTiles(sampleTiles)
+    let columns = [GridItem(.flexible()), GridItem(.flexible())]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                ForEach(groupedTiles.sorted(by: { $0.key < $1.key }), id: \.key) { group, tiles in
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(group)
+                            .font(.title2)
+                            .bold()
+                            .padding(.horizontal)
+
+                        LazyVGrid(columns: columns, spacing: 16) {
+                            ForEach(tiles) { tile in
+                                TileView(tile: tile)
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
                 }
             }
+            .padding(.vertical)
         }
-
-        var result: [CalendarMonth] = []
-
-        // Step 2: Process each month
-        for (year, month) in monthComponentsList {
-            // Create a date for the first day of the month
-            var components = DateComponents(year: year, month: month, day: 1)
-            guard let startOfMonth = calendar.date(from: components),
-                  let range = calendar.range(of: .day, in: .month, for: startOfMonth) else {
-                continue // Skip if date construction fails
-            }
-
-            // Step 3: Generate all dates for the month (1st to last day)
-            var allDays: [Date] = []
-            for day in range {
-                components.day = day
-                if let date = calendar.date(from: components) {
-                    allDays.append(date)
-                }
-            }
-
-            // Step 4: Group dates by week of the month
-            var weekMap: [Int: [CalendarDay]] = [:]
-
-            for date in allDays {
-                let weekOfMonth = calendar.component(.weekOfMonth, from: date)
-                // find pickerDate same as date
-                let pickerDate = inputDateSet.first { Calendar.isSameDay($0.date, date) }
-
-                let dayGroup = CalendarDay(
-                    date: date,
-                    isSelected: pickerDate?.isSelected ?? false,
-                    isEnabled: pickerDate?.isEnabled ?? false,
-                    isPublicHoliday: pickerDate?.isPublicHoliday ?? false,
-                    publicHolidayTitle: pickerDate?.publicHolidayTitle,
-                    publicHolidayDescription: pickerDate?.publicHolidayDescription,
-                    isDefault: pickerDate?.isDefault ?? false
-                )
-
-                // Append to the correct week bucket
-                if weekMap[weekOfMonth] == nil {
-                    weekMap[weekOfMonth] = []
-                }
-
-                weekMap[weekOfMonth]?.append(dayGroup)
-            }
-
-            // Step 5: Convert week map into sorted WeekGroup objects
-            var weekGroups: [CalendarWeek] = []
-            for (weekNum, dayGroups) in weekMap {
-                // Sort days within the week
-                var sortedDays = dayGroups.sorted(by: { $0.date ?? Date(timeIntervalSinceNow: 1) < $1.date ?? Date(timeIntervalSinceNow: 1) })
-                // Fill with empty data when week doesnt have 7 days
-                while sortedDays.count < 7 {
-                    sortedDays.insert(
-                        .init(
-                            date: nil,
-                            isSelected: false,
-                            isEnabled: false,
-                            isPublicHoliday: false,
-                            publicHolidayTitle: nil,
-                            publicHolidayDescription: nil,
-                            isDefault: false
-                        ),
-                        at: sortedDays.contains(
-                            where: {
-                                guard let date = $0.date else { return false }
-                                return Calendar.isFirstDayOfMonth(date)
-                            }) ? 0 : sortedDays.endIndex
-                    )
-                }
-                weekGroups.append(CalendarWeek(weekOfMonth: weekNum, days: sortedDays))
-            }
-
-            // Sort weeks within the month
-            weekGroups.sort()
-
-            // Step 6: Construct the MonthGroup and add it to result
-            let monthGroup = CalendarMonth(year: year, month: month, weeks: weekGroups)
-            result.append(monthGroup)
-        }
-
-        // Step 7: Sort all months chronologically
-        return result.sorted()
     }
+}
+
+// Tile View
+struct TileView: View {
+    let tile: Tile
+
+    var body: some View {
+        VStack {
+            Text(tile.title)
+                .font(.headline)
+                .padding()
+                .frame(maxWidth: .infinity)
+        }
+        .background(Color.white)
+        .cornerRadius(12)
+        .shadow(color: .gray.opacity(0.2), radius: 4, x: 0, y: 2)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.gray.opacity(0.1), lineWidth: 1)
+        )
+    }
+}
+
+// Preview
+struct DashboardView_Previews: PreviewProvider {
+    static var previews: some View {
+        DashboardView()
+            .background(Color(.systemGroupedBackground))
+    }
+}
