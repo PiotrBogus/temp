@@ -143,3 +143,38 @@
         "title": "Productivity KPI"
       }
     ]
+
+
+
+func groupItemsIntoTree(from flatItems: [Item]) -> [Item] {
+    var lookup: [String: Item] = [:]
+    var roots: [Item] = []
+
+    // Create a lookup dictionary
+    for var item in flatItems {
+        lookup[item.id] = item
+    }
+
+    // Build the tree
+    for var item in flatItems {
+        if let parentId = item.parentId {
+            if var parent = lookup[parentId] {
+                // Append the child to the parent's children
+                parent.children.append(item)
+                lookup[parentId] = parent
+            }
+        } else {
+            // It's a root node
+            roots.append(item)
+        }
+    }
+
+    // Reassign children from lookup to maintain hierarchy
+    func attachChildren(to item: Item) -> Item {
+        var itemWithChildren = item
+        itemWithChildren.children = item.children.map { attachChildren(to: lookup[$0.id] ?? $0) }
+        return itemWithChildren
+    }
+
+    return roots.map { attachChildren(to: lookup[$0.id] ?? $0) }
+}
