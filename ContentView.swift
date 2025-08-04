@@ -1,66 +1,47 @@
+import ComposableArchitecture
 import SwiftUI
 
-// Model
-struct Tile: Identifiable {
-    let id: UUID
-    let title: String
-    let parentId: String
-}
+public struct MenuView: View {
+    @Bindable var store: StoreOf<MenuFeature>
 
-// Sample Data
-let sampleTiles: [Tile] = [
-    Tile(id: UUID(), title: "Tile 1", parentId: "Group A"),
-    Tile(id: UUID(), title: "Tile 2", parentId: "Group A"),
-    Tile(id: UUID(), title: "Tile 3", parentId: "Group B"),
-    Tile(id: UUID(), title: "Tile 4", parentId: "Group B"),
-    Tile(id: UUID(), title: "Tile 5", parentId: "Group C"),
-    Tile(id: UUID(), title: "Tile 6", parentId: "Group C")
-]
-
-// Grouping by parentId
-func groupTiles(_ tiles: [Tile]) -> [String: [Tile]] {
-    Dictionary(grouping: tiles, by: { $0.parentId })
-}
-
-// Dashboard View
-struct DashboardView: View {
-    let groupedTiles = groupTiles(sampleTiles)
     let columns = [GridItem(.flexible()), GridItem(.flexible())]
 
-    var body: some View {
+    public init(store: StoreOf<MenuFeature>) {
+        self.store = store
+    }
+
+    public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                ForEach(groupedTiles.sorted(by: { $0.key < $1.key }), id: \.key) { group, tiles in
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(group)
-                            .font(.title2)
-                            .bold()
-                            .padding(.horizontal)
+                ForEach(store.groups) { model in
+                    expandableButton(model: model)
 
-                        LazyVGrid(columns: columns, spacing: 16) {
-                            ForEach(tiles) { tile in
-                                TileView(tile: tile)
-                            }
-                        }
-                        .padding(.horizontal)
+                    if model.isExpanded {
+                        verticalColumnView(model.items)
                     }
                 }
             }
             .padding(.vertical)
         }
+        .onFirstAppear {
+            store.send(.onFirstAppear)
+        }
     }
-}
 
-// Tile View
-struct TileView: View {
-    let tile: Tile
+    private func expandableButton(model: MenuGroupModel) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button(action: {
+                store.send(.didTapGroupHeader(id: model.id))
+            }, label: {
+                HStack(spacing: 4) {
+                    Text(model.title)
+                        .font(.headline)
+                        .padding()
+                        .frame(maxWidth: .infinity)
 
-    var body: some View {
-        VStack {
-            Text(tile.title)
-                .font(.headline)
-                .padding()
-                .frame(maxWidth: .infinity)
+                    Image(systemName: model.isExpanded ? "chevron.down" : "chevron.up")
+                }
+            })
         }
         .background(Color.white)
         .cornerRadius(12)
@@ -70,12 +51,94 @@ struct TileView: View {
                 .stroke(Color.gray.opacity(0.1), lineWidth: 1)
         )
     }
+
+    private func verticalColumnView(_ items: [MenuItemModel]) -> some View {
+        LazyVGrid(columns: columns, spacing: 16) {
+            ForEach(items) { item in
+                MenuItemView(model: item)
+            }
+        }
+        .padding(.horizontal)
+    }
 }
 
-// Preview
-struct DashboardView_Previews: PreviewProvider {
-    static var previews: some View {
-        DashboardView()
-            .background(Color(.systemGroupedBackground))
+#Preview {
+    MenuView(store: Store(initialState: MenuFeature.State()) {
+        MenuFeature()
+    })
+}
+
+
+import Foundation
+import ComposableArchitecture
+
+@Reducer
+public struct MenuFeature: Sendable {
+    public init() {}
+
+    @ObservableState
+    public struct State: Equatable {
+        var groups: IdentifiedArrayOf<MenuGroupModel> = []
+
+        public init() {}
+    }
+
+    public enum Action {
+        case delegate(Delegate)
+        case onFirstAppear
+        case didLoadMenu([MenuGroupModel])
+        case dismiss
+        case didTapGroupHeader(id: String)
+    }
+
+    @Dependency(\.menuFeatureClient.log) private var log
+    @Dependency(\.menuFeatureClient.loadMenuItems) private var loadMenuItems
+
+    public var body: some Reducer<State, Action> {
+        Reduce {
+            state,
+            action in
+            switch action {
+            case .onFirstAppear:
+                log(.debug, "menu did appear for first time")
+                return loadMenu()
+            case let .didLoadMenu(groups):
+                log(.debug, "did load menu")
+                state.groups = IdentifiedArrayOf(uniqueElements: groups)
+                return .none
+            case .delegate:
+                return .none
+            case .dismiss:
+                return .none
+            case let .didTapGroupHeader(id):
+                log(.debug, "did tap group header: \(id)")
+                let index = state.groups.firstIndex(where: { $0.id == id })
+                guard let index else {
+                    return .none
+                }
+                let oldItem = state.groups[index]
+                state.groups[index] = MenuGroupModel(
+                        id: oldItem.id,
+                        title: oldItem.title,
+                        items: oldItem.items,
+                        isExpanded: !oldItem.isExpanded
+                    )
+            
+                return .none
+            }
+        }
+    }
+}
+
+extension MenuFeature {
+    public enum Delegate: Sendable, Equatable {}
+}
+
+private extension MenuFeature {
+    private func loadMenu() -> Effect<Action> {
+        return .run { send in
+            let groups = try? await loadMenuItems()
+            await send(.didLoadMenu(groups ?? []))
+        }
     }
 }
