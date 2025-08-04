@@ -8,6 +8,16 @@
         "parentId": "internal",
         "title": "Daily Sales"
       },
+     {
+        "id": "nestedDailySales1",
+        "parentId": "dailysales",
+        "title": "nestedDailySales1"
+      },
+     {
+        "id": "nestedDailySales2",
+        "parentId": "dailysales",
+        "title": "nestedDailySales1"
+      },
       {
         "id": "sales",
         "parentId": "internal",
