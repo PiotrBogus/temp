@@ -1,180 +1,194 @@
-    [
-      {
-        "id": "internal",
-        "title": "Internal"
-      },
-      {
-        "id": "dailysales",
-        "parentId": "internal",
-        "title": "Daily Sales"
-      },
-     {
-        "id": "nestedDailySales1",
-        "parentId": "dailysales",
-        "title": "nestedDailySales1"
-      },
-     {
-        "id": "nestedDailySales2",
-        "parentId": "dailysales",
-        "title": "nestedDailySales1"
-      },
-      {
-        "id": "sales",
-        "parentId": "internal",
-        "title": "Sales"
-      },
-      {
-        "id": "globalpnl",
-        "parentId": "internal",
-        "title": "P&L Statement"
-      },
-      {
-        "id": "localpnl",
-        "parentId": "internal",
-        "title": "Region / Country P&L"
-      },
-      {
-        "id": "localmcf",
-        "parentId": "internal",
-        "title": "Region / Country MCF"
-      },
-      {
-        "id": "ytdytgsales",
-        "parentId": "internal",
-        "title": "YTD / YTG"
-      },
-      {
-        "id": "pvm",
-        "parentId": "internal",
-        "title": "PVM"
-      },
-      {
-        "id": "tfc",
-        "parentId": "internal",
-        "title": "Total Function Costs"
-      },
-      {
-        "id": "profit",
-        "parentId": "internal",
-        "title": "Profit"
-      },
-      {
-        "id": "ros",
-        "parentId": "internal",
-        "title": "Return on Sales"
-      },
-      {
-        "id": "ftepersonalcosts",
-        "parentId": "internal",
-        "title": "FTEs / Personnel Costs"
-      },
-      {
-        "id": "tacticalra",
-        "parentId": "internal",
-        "title": "Tactical RA",
-        "platform": ["web"]
-      },
-      {
-        "id": "impactanalysis",
-        "parentId": "internal",
-        "title": "Impact Analysis",
-        "platform": ["web"]
-      },
-      {
-        "id": "external",
-        "title": "External"
-      },
-      {
-        "id": "wst",
-        "parentId": "external",
-        "title": "Weekly Share Tracker"
-      },
-      {
-        "id": "mst",
-        "parentId": "external",
-        "title": "Monthly Share Tracker"
-      },
-      {
-        "id": "mtintnl",
-        "parentId": "external",
-        "title": "Market Tracker INTL Focus"
-      },
-      {
-        "id": "ptintl",
-        "parentId": "external",
-        "title": "Performance Tracker INTL"
-      },
-      {
-        "id": "ussit",
-        "parentId": "external",
-        "title": "US Stock in Trade"
-      },
-      {
-        "id": "iqvia",
-        "parentId": "external",
-        "title": "IQVIA Company Ranking"
-      },
-      {
-        "id": "ffe",
-        "parentId": "external",
-        "title": "Field Force Engagement"
-      },
-      {
-        "id": "local",
-        "title": "Local"
-      },
-      {
-        "id": "countrysales",
-        "parentId": "external",
-        "title": "Country Sales"
-      },
-      {
-        "id": "countrypnl",
-        "parentId": "external",
-        "title": "Country P&L"
-      },
-      {
-        "id": "productivity",
-        "title": "Productivity"
-      },
-      {
-        "id": "productivitykpi",
-        "parentId": "productivity",
-        "title": "Productivity KPI"
-      }
-    ]
+import ComposableArchitecture
+import Foundation
 
-
-
-func groupItemsIntoTree(from flatItems: [Item]) -> [Item] {
-    var lookup: [String: Item] = [:]
-    var roots: [Item] = []
-
-    // Create a lookup dictionary
-    for var item in flatItems {
-        lookup[item.id] = item
+@Reducer
+struct ItemTreeFeature {
+    struct State: Equatable, Identifiable {
+        let id: String
+        var title: String
+        var platform: [String]
+        var isExpanded: Bool = false
+        var children: IdentifiedArrayOf<State> = []
     }
 
-    // Build the tree
-    for var item in flatItems {
-        if let parentId = item.parentId {
-            if var parent = lookup[parentId] {
-                // Append the child to the parent's children
-                parent.children.append(item)
-                lookup[parentId] = parent
+    enum Action {
+        case toggleExpand
+        case child(id: State.ID, action: Action)
+    }
+
+    var body: some ReducerOf<Self> {
+        Reduce { state, action in
+            switch action {
+            case .toggleExpand:
+                state.isExpanded.toggle()
+                return .none
+
+            case let .child(id, action):
+                return .none
             }
+        }
+        .forEach(\.children, action: \.child) {
+            Self()
+        }
+    }
+}
+✅ 2. Tree Builder From JSON
+Assuming you still have a decodable model:
+
+swift
+Kopiuj
+Edytuj
+struct Item: Decodable {
+    let id: String
+    let title: String
+    let parentId: String?
+    let platform: [String]?
+}
+Now convert flat Item list to ItemTreeFeature.State tree:
+
+swift
+Kopiuj
+Edytuj
+func buildTree(from flatItems: [Item]) -> IdentifiedArrayOf<ItemTreeFeature.State> {
+    var lookup: [String: ItemTreeFeature.State] = [:]
+    var roots: IdentifiedArrayOf<ItemTreeFeature.State> = []
+
+    // First pass: create nodes
+    for item in flatItems {
+        let node = ItemTreeFeature.State(
+            id: item.id,
+            title: item.title,
+            platform: item.platform ?? []
+        )
+        lookup[item.id] = node
+    }
+
+    // Second pass: build relationships
+    for item in flatItems {
+        guard let node = lookup[item.id] else { continue }
+
+        if let parentId = item.parentId, var parent = lookup[parentId] {
+            parent.children.append(node)
+            lookup[parentId] = parent
         } else {
-            // It's a root node
-            roots.append(item)
+            roots.append(node)
         }
     }
 
-    // Reassign children from lookup to maintain hierarchy
-    func attachChildren(to item: Item) -> Item {
-        var itemWithChildren = item
-        itemWithChildren.children = item.children.map { attachChildren(to: lookup[$0.id] ?? $0) }
-        return itemWithChildren
+    // Fix children relationship (rebuild to preserve identity)
+    func attachChildren(to node: ItemTreeFeature.State) -> ItemTreeFeature.State {
+        var updated = node
+        updated.children = IdentifiedArray(uniqueElements: node.children.map {
+            attachChildren(to: lookup[$0.id] ?? $0)
+        })
+        return updated
     }
 
-    return roots.map { attachChildren(to: lookup[$0.id] ?? $0) }
+    return IdentifiedArray(uniqueElements: roots.map { attachChildren(to: $0) })
+}
+✅ 3. SwiftUI View: ItemTreeView
+swift
+Kopiuj
+Edytuj
+import SwiftUI
+import ComposableArchitecture
+
+struct ItemTreeView: View {
+    let store: StoreOf<ItemTreeFeature>
+
+    var body: some View {
+        WithViewStore(store, observe: { $0 }) { viewStore in
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    if !viewStore.children.isEmpty {
+                        Button(action: {
+                            viewStore.send(.toggleExpand)
+                        }) {
+                            Image(systemName: viewStore.isExpanded ? "chevron.down" : "chevron.right")
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Text(viewStore.title)
+                        .font(.body)
+                }
+
+                if viewStore.isExpanded {
+                    ForEachStore(
+                        store.scope(state: \.children, action: \.child),
+                        content: ItemTreeView.init(store:)
+                    )
+                    .padding(.leading, 16)
+                }
+            }
+        }
+    }
+}
+✅ 4. Root Feature & View
+swift
+Kopiuj
+Edytuj
+@Reducer
+struct TreeRootFeature {
+    struct State: Equatable {
+        var roots: IdentifiedArrayOf<ItemTreeFeature.State> = []
+    }
+
+    enum Action {
+        case root(id: ItemTreeFeature.State.ID, action: ItemTreeFeature.Action)
+    }
+
+    var body: some ReducerOf<Self> {
+        Scope(state: \.roots, action: \.root) {
+            ItemTreeFeature()
+        }
+    }
+}
+swift
+Kopiuj
+Edytuj
+struct TreeRootView: View {
+    let store: StoreOf<TreeRootFeature>
+
+    var body: some View {
+        WithViewStore(store, observe: { _ in }) { _ in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEachStore(
+                        store.scope(state: \.roots, action: \.root),
+                        content: ItemTreeView.init(store:)
+                    )
+                }
+                .padding()
+            }
+        }
+    }
+}
+✅ 5. Usage in ContentView
+swift
+Kopiuj
+Edytuj
+struct ContentView: View {
+    @State var store: StoreOf<TreeRootFeature>
+
+    init() {
+        let items: [Item] = loadItems() // Load JSON
+        let tree = buildTree(from: items)
+        self.store = Store(initialState: TreeRootFeature.State(roots: tree)) {
+            TreeRootFeature()
+        }
+    }
+
+    var body: some View {
+        TreeRootView(store: store)
+    }
+
+    func loadItems() -> [Item] {
+        guard let url = Bundle.main.url(forResource: "yourFile", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let items = try? JSONDecoder().decode([Item].self, from: data) else {
+            return []
+        }
+        return items
+    }
 }
