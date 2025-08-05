@@ -1,35 +1,78 @@
-struct TreeMenuItemView: View {
-    @Binding var item: MenuItem
-    var depth: Int = 0
+    private static func groupItemsIntoTree(_ flatItems: [MenuItemApiMock]) -> [MenuItemFeature.State] {
+        var lookup: [String: MenuItemFeature.State] = [:]
+        var roots: [MenuItemFeature.State] = []
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(item.title)
-                    .font(item.children.isEmpty ? .body : .headline)
-                    .bold(item.children.isEmpty == false)
+        for item in flatItems {
+            lookup[item.id] = MenuItemFeature.State(id: item.id, title: item.title, parentId: item.parentId, childrens: [])
+        }
 
-                Spacer()
+        for item in flatItems {
+            guard let node = lookup[item.id] else { continue }
 
-                if item.children.isEmpty == false {
-                    Button {
-                        item.isExpanded.toggle()
-                    } label: {
-                        Image(systemName: item.isExpanded ? "chevron.down" : "chevron.right")
-                            .foregroundColor(.white)
-                    }
-                } else if item.isSelected {
-                    Image(systemName: "checkmark")
-                }
+            if let parentId = item.parentId,
+                var parent = lookup[parentId] {
+                parent.childrens.append(node)
+                lookup[parentId] = parent
+            } else {
+                roots.append(node)
             }
-            .padding(.horizontal, CGFloat(depth) * 16)
-            .frame(height: 48)
+        }
 
-            if item.isExpanded {
-                ForEach($item.children) { $child in
-                    TreeMenuItemView(item: $child, depth: depth + 1)
+        func attachChildren(for node: MenuItemFeature.State) -> MenuItemFeature.State {
+            var updatedNode = node
+            updatedNode.childrens = IdentifiedArrayOf(uniqueElements: node.childrens.map { attachChildren(for: lookup[$0.id] ?? $0) })
+            return updatedNode
+        }
+
+        return roots.map { attachChildren(for: $0) }
+    }
+
+import Foundation
+import ComposableArchitecture
+
+@Reducer
+public struct MenuItemFeature: Sendable {
+    public init() {}
+
+    @ObservableState
+    public struct State: Equatable, Identifiable {
+        public let id: String
+        let title: String
+        let parentId: String?
+        var childrens: IdentifiedArrayOf<MenuItemFeature.State>
+        var isExpanded: Bool = false
+        var isSelected: Bool = false
+
+        var isPossibleToExpand: Bool {
+            childrens.isEmpty == false
+        }
+
+        mutating func attachChildrens(newValue: IdentifiedArrayOf<MenuItemFeature.State>) {
+            childrens = newValue
+        }
+    }
+
+    public indirect enum Action {
+        case didTapItem(id: String)
+        case childrens(IdentifiedActionOf<MenuItemFeature>)
+    }
+
+    public var body: some Reducer<State, Action> {
+        Reduce { state, action in
+            switch action {
+            case let .didTapItem(id):
+//                log(.debug, "did tap item: \(id)")
+                if state.isPossibleToExpand {
+                    state.isExpanded = !state.isExpanded
                 }
+                return .none
+            case .childrens:
+                return .none
             }
         }
     }
+}
+
+extension MenuItemFeature {
+    public enum Delegate: Sendable, Equatable {}
 }
