@@ -2,93 +2,31 @@ import Foundation
 import ComposableArchitecture
 
 @Reducer
-public struct MenuFeature: Sendable {
-    public init() {}
-
-    @ObservableState
-    public struct State: Equatable {
-        var items: IdentifiedArrayOf<MenuItemFeature.State> = []
-
-        public init() {}
-    }
-
-    public enum Action {
-        case delegate(Delegate)
-        case onFirstAppear
-        case didLoadMenu([MenuItemFeature.State])
-        case dismiss
-        case items(IdentifiedActionOf<MenuItemFeature>)
-    }
-
-    @Dependency(\.menuFeatureClient.log) private var log
-    @Dependency(\.menuFeatureClient.loadMenuItems) private var loadMenuItems
-
-    public var body: some Reducer<State, Action> {
-        Reduce { state, action in
-            switch action {
-            case .onFirstAppear:
-                log(.debug, "menu did appear for first time")
-                return loadMenu()
-            case let .didLoadMenu(items):
-                log(.debug, "did load menu")
-                state.items = IdentifiedArrayOf(uniqueElements: items)
-                return .none
-            case .delegate:
-                return .none
-            case .dismiss:
-                return .none
-            case .items:
-                return .none
-            }
-        }
-        .forEach(\.items, action: \.items) {
-            MenuItemFeature()
-        }
-    }
-}
-
-extension MenuFeature {
-    public enum Delegate: Sendable, Equatable {}
-}
-
-private extension MenuFeature {
-    private func loadMenu() -> Effect<Action> {
-        return .run { send in
-            let groups = try? await loadMenuItems()
-            await send(.didLoadMenu(groups ?? []))
-        }
-    }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-import Foundation
-import ComposableArchitecture
-
-@Reducer
 public struct MenuItemFeature: Sendable {
     public init() {}
 
     @ObservableState
-    public struct State: Equatable, Identifiable {
+    public struct State: TreeItemResult {
+        var childrens: [any TreeItemResult]
+        var castedChildrens: IdentifiedArrayOf<Self> {
+            let bb = childrens as? [MenuItemFeature.State] ?? []
+        }
+
         public let id: String
         let title: String
         let parentId: String?
-        var childrens: IdentifiedArrayOf<MenuItemFeature.State>
         var isExpanded: Bool = false
         var isSelected: Bool = false
 
         var isPossibleToExpand: Bool {
             childrens.isEmpty == false
+        }
+
+        public static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.id == rhs.id &&
+            lhs.title == rhs.title &&
+            lhs.parentId == rhs.parentId &&
+            lhs.childrens.count == rhs.childrens.count
         }
     }
 
@@ -107,9 +45,12 @@ public struct MenuItemFeature: Sendable {
                 log(.debug, "did tap item: \(id)")
                 if state.isPossibleToExpand {
                     state.isExpanded = !state.isExpanded
+                    return .none
                 } else {
                     state.isSelected = !state.isSelected
+                    return .send(.delegate(.didTapItem(id: id)))
                 }
+            case .childrens(.element(id: _, action: .delegate(.didTapItem(let id)))):
                 return .send(.delegate(.didTapItem(id: id)))
             case .childrens:
                 return .none
@@ -128,3 +69,14 @@ extension MenuItemFeature {
         case didTapItem(id: String)
     }
 }
+
+
+import Foundation
+import ComposableArchitecture
+
+protocol TreeItemResult: Identifiable, Equatable {
+    var id: String { get }
+    var parentId: String? { get }
+    var childrens: [any TreeItemResult] { get set }
+}
+
