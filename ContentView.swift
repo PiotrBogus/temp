@@ -127,3 +127,16 @@ extension MenuItemFeature {
         case didTapItem(id: String)
     }
 }
+
+
+
+
+
+
+private func selectOnly(_ id: String, in items: inout IdentifiedArrayOf<MenuItemFeature.State>) {
+    for index in items.indices {
+        items[index].isSelected = (items[index].id == id)
+        // rekurencja dla children
+        selectOnly(id, in: &items[index].childrens)
+    }
+}
