@@ -1,82 +1,72 @@
-import Foundation
 import ComposableArchitecture
+import Foundation
 
-@Reducer
-public struct MenuItemFeature: Sendable {
-    public init() {}
+struct TreeStructerBuilder<Result: TreeItemResult, ApiItem: ApiTreeItem> {
+    private let itemMapper: (ApiItem) -> Result
 
-    @ObservableState
-    public struct State: TreeItemResult {
-        var childrens: [any TreeItemResult]
-        var castedChildrens: IdentifiedArrayOf<Self> {
-            let bb = childrens as? [MenuItemFeature.State] ?? []
-        }
-
-        public let id: String
-        let title: String
-        let parentId: String?
-        var isExpanded: Bool = false
-        var isSelected: Bool = false
-
-        var isPossibleToExpand: Bool {
-            childrens.isEmpty == false
-        }
-
-        public static func == (lhs: Self, rhs: Self) -> Bool {
-            lhs.id == rhs.id &&
-            lhs.title == rhs.title &&
-            lhs.parentId == rhs.parentId &&
-            lhs.childrens.count == rhs.childrens.count
-        }
+    init(itemMapper: @escaping (ApiItem) -> Result) {
+        self.itemMapper = itemMapper
     }
 
-    public indirect enum Action {
-        case delegate(Delegate)
-        case didTapItem(id: String)
-        case childrens(IdentifiedActionOf<MenuItemFeature>)
-    }
+    func buildTree(_ flatItems: [ApiItem]) -> [Result] {
+        // 1. Build flat lookup map
+        var lookup: [String: Result] = [:]
 
-    @Dependency(\.menuItemFeatureClient.log) private var log
+        for item in flatItems {
+            lookup[item.id] = itemMapper(item)
+        }
 
-    public var body: some Reducer<State, Action> {
-        Reduce { state, action in
-            switch action {
-            case let .didTapItem(id):
-                log(.debug, "did tap item: \(id)")
-                if state.isPossibleToExpand {
-                    state.isExpanded = !state.isExpanded
-                    return .none
-                } else {
-                    state.isSelected = !state.isSelected
-                    return .send(.delegate(.didTapItem(id: id)))
+        // 2. Build child relationships (child ID -> parent ID)
+        for item in flatItems {
+            guard let parentId = item.parentId else { continue }
+            guard var parent = lookup[parentId], let child = lookup[item.id] else { continue }
+
+            // Append child to the parent's children list
+            parent.childrens.append(child)
+            lookup[parentId] = parent
+        }
+
+        // 3. Recursive child population
+        func attachChildren(for node: Result) -> Result {
+            var updatedNode = node
+            updatedNode.childrens = IdentifiedArrayOf(
+                uniqueElements: node.childrens.compactMap { child in
+                    return attachChildren(for: lookup[child.id] ?? child)
                 }
-            case .childrens(.element(id: _, action: .delegate(.didTapItem(let id)))):
-                return .send(.delegate(.didTapItem(id: id)))
-            case .childrens:
-                return .none
-            case .delegate:
-                return .none
+            )
+            return updatedNode
+        }
+
+
+        // 4. Collect root nodes and attach full children recursively
+        let rootNodes: [Result] = flatItems
+            .filter { $0.parentId == nil }
+            .compactMap {
+                guard let node = lookup[$0.id] else { return nil }
+                return attachChildren(for: node)
             }
-        }
-        .forEach(\.childrens, action: \.childrens) {
-            MenuItemFeature()
-        }
+
+        return rootNodes
     }
 }
 
-extension MenuItemFeature {
-    public enum Delegate: Sendable, Equatable {
-        case didTapItem(id: String)
-    }
+
+
+import Foundation
+
+protocol ApiTreeItem {
+    var parentId: String? { get }
+    var id: String { get }
 }
+
 
 
 import Foundation
 import ComposableArchitecture
 
 protocol TreeItemResult: Identifiable, Equatable {
+    associatedtype Child: TreeItemResult
     var id: String { get }
     var parentId: String? { get }
-    var childrens: [any TreeItemResult] { get set }
+    var childrens: IdentifiedArrayOf<Child> { get set }
 }
-
