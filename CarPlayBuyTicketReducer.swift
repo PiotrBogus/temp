@@ -17,6 +17,7 @@ struct CarPlayBuyTicketReducer: Sendable {
         case didAppear
         case loading(String)
         case error(CarPlayErrorTemplateModel<CarPlayBuyTicketFeatureErrorType>)
+        case didChangeData
     }
 
     enum Action: Sendable {
@@ -33,11 +34,12 @@ struct CarPlayBuyTicketReducer: Sendable {
         case onSelectAccountsTap
         case onSelectCarTap
         case didLoadAccounts([CarPlayParkingsAccount])
+        case didLoadSelectedCity(CarPlayParkingsCity)
     }
 
     @Reducer(state: .equatable, .sendable, action: .sendable)
     enum Destination {
-        case zoneSelection
+        case zoneSelection(CarPlayZoneSelectionReducer)
         case parkingTimeSelection
         case accountsSelection(CarPlayAccountSelectionReducer)
         case carSelection
@@ -56,7 +58,9 @@ struct CarPlayBuyTicketReducer: Sendable {
                 state.templateState = .didAppear
                 return .none
             case .onSelectZoneTap:
-                state.destination = .zoneSelection
+                return loadSelectedCity()
+            case let .didLoadSelectedCity(city):
+                state.destination = .zoneSelection(CarPlayZoneSelectionReducer.State(city: city))
                 return .none
             case .onSelectParkingTimeTap:
                 state.destination = .parkingTimeSelection
@@ -88,19 +92,25 @@ struct CarPlayBuyTicketReducer: Sendable {
                 default:
                     return .none
                 }
-//            case .destination(.dismiss):
-//                return .none
-//            case let .destination(.presented(.accountsSelection(.delegate(.dismissAccountSelection(account))))):
-//                state.data?.selectedAccount = account
-//                state.destination = nil
-//                return .none
+            case .destination(.presented(.accountsSelection(.delegate(.dismissAccountSelection(let account))))):
+                state.data?.selectedAccount = account
+                state.data?.refresh()
+                state.templateState = .didChangeData
+                state.destination = nil
+                return .none
+            case .destination(.presented(.zoneSelection(.delegate(.dismissZoneSelection(let zone))))):
+                state.data?.selectedSubarea = zone
+                state.data?.refresh()
+                state.templateState = .didChangeData
+                state.destination = nil
+                return .none
             case .destination:
                 return .none
             }
         }
-        .ifLet(\.$destination, action: \.destination) {
-            Destination.body
-        }
+//        .ifLet(\.$destination, action: \.destination) {
+//            Destination.body
+//        }
     }
 
     private func loadData(subareaHint: String?) -> Effect<Action> {
@@ -119,6 +129,17 @@ struct CarPlayBuyTicketReducer: Sendable {
             do {
                 let accounts = try reducerClient.loadAccounts()
                 await send(.didLoadAccounts(accounts))
+            } catch {
+                await send(.refresh)
+            }
+        }
+    }
+
+    private func loadSelectedCity() -> Effect<Action> {
+        return .run { send in
+            do {
+                let city = try reducerClient.loadSelectedCity()
+                await send(.didLoadSelectedCity(city))
             } catch {
                 await send(.refresh)
             }
