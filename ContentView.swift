@@ -1,139 +1,112 @@
-import XCTest
-@testable import Data
+  private func organizeDatesIntoMonthWeekDayGroups(pickerDates: [PickerDate]) -> [CalendarMonth] {
+        let calendar = Calendar(identifier: .gregorian)
+        let sortedPickerDates = pickerDates.sorted { $0.date < $1.date }
+        let inputDateSet = Set(sortedPickerDates) // For quick lookup to see which dates were in the original array
 
-// swiftlint:disable force_try
-final class TreeStructureBuilderTests: XCTestCase {
-    func testBuildTree_SingleRootWithChildrenAndGrandchild() {
-        // A
-        // ├─ B
-        // │  └─ D
-        // └─ C
-        let items: [ApiNode] = [
-            .init(parentId: nil, id: "A"),
-            .init(parentId: "A", id: "B"),
-            .init(parentId: "A", id: "C"),
-            .init(parentId: "B", id: "D")
-        ]
+        // Step 1: Identify all unique months present in the input dates
+        var monthsSet = Set<String>()
+        var monthComponentsList: [(year: Int, month: Int)] = []
 
-        let builder = makeBuilder()
-        let roots = builder.buildTree(items)
-
-        XCTAssertEqual(roots.map(\.id), ["A"], "Should produce a single root A")
-
-        let a = try! XCTUnwrap(find("A", in: roots))
-        XCTAssertEqual(a.depth, 0)
-        XCTAssertEqual(a.childrens.map(\.id), ["B", "C"], "A should have children B and C in insertion order")
-
-        let b = try! XCTUnwrap(find("B", in: roots))
-        XCTAssertEqual(b.depth, 1)
-        XCTAssertEqual(b.childrens.map(\.id), ["D"], "B should have one child D")
-
-        let c = try! XCTUnwrap(find("C", in: roots))
-        XCTAssertEqual(c.depth, 1)
-        XCTAssertTrue(c.childrens.isEmpty, "C should have no children")
-
-        let d = try! XCTUnwrap(find("D", in: roots))
-        XCTAssertEqual(d.depth, 2)
-        XCTAssertTrue(d.childrens.isEmpty, "D should have no children")
-    }
-
-    func testBuildTree_MultipleRoots() {
-        // A
-        // └─ B
-        // E  (second root)
-        let items: [ApiNode] = [
-            .init(parentId: nil, id: "A"),
-            .init(parentId: "A", id: "B"),
-            .init(parentId: nil, id: "E")
-        ]
-
-        let builder = makeBuilder()
-        let roots = builder.buildTree(items)
-
-        XCTAssertEqual(roots.map(\.id), ["A", "E"], "Should contain both roots in the order they appear among flat root items")
-
-        let a = try! XCTUnwrap(find("A", in: roots))
-        XCTAssertEqual(a.depth, 0)
-        XCTAssertEqual(a.childrens.map(\.id), ["B"])
-
-        let b = try! XCTUnwrap(find("B", in: roots))
-        XCTAssertEqual(b.depth, 1)
-
-        let e = try! XCTUnwrap(find("E", in: roots))
-        XCTAssertEqual(e.depth, 0)
-        XCTAssertTrue(e.childrens.isEmpty)
-    }
-
-    func testBuildTree_OrphanChildWithMissingParent_IsNotIncluded() {
-        // X has parent "Z" that does not exist → cannot become root and cannot be attached → should be excluded
-        let items: [ApiNode] = [
-            .init(parentId: nil, id: "A"),
-            .init(parentId: "Z", id: "X") // orphan
-        ]
-
-        let builder = makeBuilder()
-        let roots = builder.buildTree(items)
-
-        XCTAssertEqual(roots.map(\.id), ["A"], "Only A should be a root")
-        XCTAssertEqual(roots.first?.depth, 0)
-        XCTAssertNil(find("X", in: roots), "Orphan X should not appear anywhere in the resulting tree")
-    }
-
-    func testBuildTree_DeepNesting() {
-        // R → S → T → U (chain)
-        let items: [ApiNode] = [
-            .init(parentId: nil, id: "R"),
-            .init(parentId: "R", id: "S"),
-            .init(parentId: "S", id: "T"),
-            .init(parentId: "T", id: "U")
-        ]
-
-        let builder = makeBuilder()
-        let roots = builder.buildTree(items)
-
-        XCTAssertEqual(roots.map(\.id), ["R"])
-        XCTAssertNotNil(find("S", in: roots))
-        XCTAssertNotNil(find("T", in: roots))
-        XCTAssertNotNil(find("U", in: roots))
-
-        let r = try! XCTUnwrap(find("R", in: roots))
-        XCTAssertEqual(r.depth, 0)
-        XCTAssertEqual(r.childrens.map(\.id), ["S"])
-
-        let s = try! XCTUnwrap(find("S", in: roots))
-        XCTAssertEqual(s.depth, 1)
-        XCTAssertEqual(s.childrens.map(\.id), ["T"])
-
-        let t = try! XCTUnwrap(find("T", in: roots))
-        XCTAssertEqual(t.depth, 2)
-        XCTAssertEqual(t.childrens.map(\.id), ["U"])
-
-        let u = try! XCTUnwrap(find("U", in: roots))
-        XCTAssertEqual(u.depth, 3)
-        XCTAssertTrue(u.childrens.isEmpty)
-    }
-
-    func testBuildTree_EmptyInput() {
-        let builder = makeBuilder()
-        let roots = builder.buildTree([])
-        XCTAssertTrue(roots.isEmpty)
-    }
-
-    // MARK: - Helpers
-
-    private func makeBuilder() -> TreeStructureBuilder<Node, ApiNode> {
-        TreeStructureBuilder<Node, ApiNode> { api in
-            Node(id: api.id, parentId: api.parentId, childrens: [], depth: 0)
+        for pickerDate in inputDateSet {
+            let comps = calendar.dateComponents([.year, .month], from: pickerDate.date)
+            if let year = comps.year, let month = comps.month {
+                let key = String(format: "%04d-%02d", year, month)
+                // Avoid duplicates by using a set
+                if !monthsSet.contains(key) {
+                    monthsSet.insert(key)
+                    monthComponentsList.append((year, month))
+                }
+            }
         }
-    }
 
-    private func find(_ id: String, in roots: [Node]) -> Node? {
-        var stack = roots
-        while let node = stack.popLast() {
-            if node.id == id { return node }
-            stack.append(contentsOf: node.childrens)
+        var result: [CalendarMonth] = []
+
+        // Step 2: Process each month
+        for (year, month) in monthComponentsList {
+            // Create a date for the first day of the month
+            var components = DateComponents(year: year, month: month, day: 1)
+            guard let startOfMonth = calendar.date(from: components),
+                  let range = calendar.range(of: .day, in: .month, for: startOfMonth) else {
+                continue // Skip if date construction fails
+            }
+
+            // Step 3: Generate all dates for the month (1st to last day)
+            var allDays: [Date] = []
+            for day in range {
+                components.day = day
+                if let date = calendar.date(from: components) {
+                    allDays.append(date)
+                }
+            }
+
+            // Step 4: Group dates by week of the month
+            var weekMap: [Int: [CalendarDay]] = [:]
+
+            for date in allDays {
+                let weekOfMonth = calendar.component(.weekOfMonth, from: date)
+                // find pickerDate same as date
+                let pickerDate = inputDateSet.first { Calendar.isSameDay($0.date, date) }
+
+                let dayGroup = CalendarDay(
+                    date: date,
+                    isSelected: pickerDate?.isSelected ?? false,
+                    isEnabled: pickerDate?.isEnabled ?? false,
+                    isPublicHoliday: pickerDate?.isPublicHoliday ?? false,
+                    publicHolidayTitle: pickerDate?.publicHolidayTitle,
+                    publicHolidayDescription: pickerDate?.publicHolidayDescription,
+                    isDefault: pickerDate?.isDefault ?? false,
+                    hasAlternateData: pickerDate?.hasAlternateData ?? false,
+                    isAlternateData: pickerDate?.isAlternateData ?? false
+                )
+
+                // Append to the correct week bucket
+                if weekMap[weekOfMonth] == nil {
+                    weekMap[weekOfMonth] = []
+                }
+
+                weekMap[weekOfMonth]?.append(dayGroup)
+            }
+
+            // Step 5: Convert week map into sorted WeekGroup objects
+            var weekGroups: [CalendarWeek] = []
+            for (weekNum, dayGroups) in weekMap {
+                // Sort days within the week
+                var sortedDays = dayGroups.sorted(by: { $0.date ?? Date(timeIntervalSinceNow: 1) < $1.date ?? Date(timeIntervalSinceNow: 1) })
+                // Fill with empty data when week doesnt have 7 days
+                while sortedDays.count < 7 {
+                    sortedDays.insert(
+                        .init(
+                            date: nil,
+                            isSelected: false,
+                            isEnabled: false,
+                            isPublicHoliday: false,
+                            publicHolidayTitle: nil,
+                            publicHolidayDescription: nil,
+                            isDefault: false,
+                            hasAlternateData: false,
+                            isAlternateData: false
+                        ),
+                        at: sortedDays.contains(
+                            where: {
+                                guard let date = $0.date else { return false }
+                                return Calendar.isFirstDayOfMonth(date)
+                            }) ? 0 : sortedDays.endIndex
+                    )
+                }
+                weekGroups.append(CalendarWeek(weekOfMonth: weekNum, days: sortedDays))
+            }
+
+            // Sort weeks within the month
+            weekGroups.sort()
+
+            // Step 6: Construct the MonthGroup and add it to result
+            let monthGroup = CalendarMonth(year: year, month: month, weeks: weekGroups)
+            result.append(monthGroup)
         }
-        return nil
+        // Step 7: Remove whole month if atleast one day isn't selectable
+        // Sort all months chronologically
+        return result.filter {
+            $0.weeks.contains(where: { week in
+                week.days.contains(where: { $0.isEnabled }) })
+        }.sorted()
     }
-}
-// swiftlint:enable force_try
