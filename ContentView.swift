@@ -110,3 +110,39 @@
                 week.days.contains(where: { $0.isEnabled }) })
         }.sorted()
     }
+
+
+//
+//  PickerDate.swift
+//  BPAGenieV2
+//
+//  Created by Daniel Satin on 21.03.2025.
+//  Copyright © 2025 Novartis. All rights reserved.
+//
+
+import Foundation
+
+public struct PickerDate: Equatable, Hashable, Sendable, Comparable {
+    let id: Int
+    let date: Date
+    let isSelected: Bool
+    let isEnabled: Bool
+    let isDefault: Bool
+    let isPublicHoliday: Bool
+    let publicHolidayTitle: String?
+    let publicHolidayDescription: String?
+    let hasAlternateData: Bool
+    let isAlternateData: Bool
+    
+    var month: Int {
+        Calendar.current.component(.month, from: date)
+    }
+    
+    var year: Int {
+        Calendar.current.component(.year, from: date)
+    }
+    
+    public static func < (lhs: PickerDate, rhs: PickerDate) -> Bool {
+        lhs.date < rhs.date
+    }
+}
