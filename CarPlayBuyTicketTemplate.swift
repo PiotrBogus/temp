@@ -11,6 +11,7 @@ final class CarPlayBuyTicketTemplate: CarPlayTemplate {
     private var cancellables = Set<AnyCancellable>()
     @Dependency(\.carPlayCoordinator) private var coordinator
     @Dependency(\.carPlayResourceProvider) private var resourceProvider
+    private var list: CPListTemplate?
 
     init(store: StoreOf<CarPlayBuyTicketReducer>) {
         self.store = store
@@ -30,9 +31,13 @@ final class CarPlayBuyTicketTemplate: CarPlayTemplate {
                     case .didAppear:
                         self?.newParkingFormTemplate()
                     case let .loading(message):
-                        self?.loadingTemplate(message: message)
+                        print(message)
+                        break
+//                        self?.loadingTemplate(message: message)
                     case let .error(errorModel):
                         self?.errorTemplate(errorModel: errorModel)
+                    case .didChangeData:
+                        self?.refreshTemplate()
                     }
                 })
             .store(in: &cancellables)
@@ -43,14 +48,14 @@ final class CarPlayBuyTicketTemplate: CarPlayTemplate {
             .receive(on: DispatchQueue.main)
             .sink(receiveValue: { [weak self] destination in
                 switch destination {
-                case let .accountsSelection(state):
-                    self?.accountSelectionTemplate(state: state)
+                case .accountsSelection:
+                    self?.accountSelectionTemplate()
                 case .carSelection:
                     break
                 case .parkingTimeSelection:
                     break
                 case .zoneSelection:
-                    break
+                    self?.zonetSelectionTemplate()
                 case .none:
                     break
                 }
@@ -83,21 +88,12 @@ final class CarPlayBuyTicketTemplate: CarPlayTemplate {
     private func newParkingFormTemplate() {
         guard let model = store.data else { return }
         let sections = createParkingFormSections(model: model)
-        let list = CPListTemplate(title: resourceProvider.newParkingFormTitleText, sections: sections)
+        list = CPListTemplate(title: resourceProvider.newParkingFormTitleText, sections: sections)
         let nextButton = CPBarButton(title: resourceProvider.nextButtonText) { [weak self] _ in
             self?.store.send(.onNextButtonTap)
         }
-        list.trailingNavigationBarButtons = [nextButton]
-
-        model.refreshTemplateHandler = { [weak self] in
-            guard let self else { return }
-            let sections = self.createParkingFormSections(
-                model: model
-            )
-
-            list.updateSections(sections)
-        }
-        coordinator.interfaceController?.dismissAndPush(template: list)
+        list?.trailingNavigationBarButtons = [nextButton]
+        coordinator.interfaceController?.dismissAndPush(template: list!)
     }
 
     private func createParkingFormSections(
@@ -176,13 +172,20 @@ final class CarPlayBuyTicketTemplate: CarPlayTemplate {
         return row
     }
 
-    private func accountSelectionTemplate(state: CarPlayAccountSelectionReducer.State) {
-        let store = Store(
-            initialState: state,
-            reducer: {
-                CarPlayAccountSelectionReducer()
-            }
-        )
+    private func refreshTemplate() {
+        guard let data = store.data else { return }
+        let sections = createParkingFormSections(model: data)
+
+        list?.updateSections(sections)
+    }
+
+    private func accountSelectionTemplate() {
+        let store = store.scope(state: \.destination!.accountsSelection!, action: \.destination.accountsSelection)
         coordinator.save(CarPlayAccountSelectionTemplate(store: store))
+    }
+
+    private func zonetSelectionTemplate() {
+        let store = store.scope(state: \.destination!.zoneSelection!, action: \.destination.zoneSelection)
+        coordinator.save(CarPlayZoneSelectionTemplate(store: store))
     }
 }
