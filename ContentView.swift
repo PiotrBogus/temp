@@ -1,231 +1,49 @@
-import Foundation
-import ComposableArchitecture
 import Domain
-
-@Reducer
-public struct MenuItemFeature: Sendable {
-    public init() {}
-
-    @ObservableState
-    public struct State: TreeItemResult, Identifiable {
-        public var childrens: [MenuItemFeature.State] = []
-        var identifiedArrayOfChildrens: IdentifiedArrayOf<MenuItemFeature.State> = []
-
-        public let id: String
-        public var depth: Int = 0
-        public let parentId: String?
-        let title: String
-        var isExpanded: Bool = false
-        var isSelected: Bool = false
-
-        var isPossibleToExpand: Bool {
-            childrens.isEmpty == false
-        }
-    }
-
-    public indirect enum Action {
-        case onAppear
-        case delegate(Delegate)
-        case didTapItem(id: String)
-        case childrens(IdentifiedActionOf<MenuItemFeature>)
-    }
-
-    @Dependency(\.menuItemFeatureClient.log) private var log
-
-    public var body: some Reducer<State, Action> {
-        Reduce { state, action in
-            switch action {
-            case .onAppear:
-                state.identifiedArrayOfChildrens = IdentifiedArrayOf(uniqueElements: state.childrens)
-                return .none
-            case let .didTapItem(id):
-                log(.debug, "did tap item: \(id)")
-                if state.isPossibleToExpand {
-                    state.isExpanded = !state.isExpanded
-                    return .none
-                } else {
-                    state.isSelected = !state.isSelected
-                    return .send(.delegate(.didTapItem(id: id)))
-                }
-            case .childrens(.element(id: _, action: .delegate(.didTapItem(let id)))):
-                return .send(.delegate(.didTapItem(id: id)))
-            case .childrens:
-                return .none
-            case .delegate:
-                return .none
-            }
-        }
-        .forEach(\.identifiedArrayOfChildrens, action: \.childrens) {
-            MenuItemFeature()
-        }
-    }
-}
-
-extension MenuItemFeature {
-    public enum Delegate: Sendable, Equatable {
-        case didTapItem(id: String)
-    }
-}
-
-
-
 import Foundation
-import ComposableArchitecture
 
-@Reducer
-public struct MenuFeature: Sendable {
-    public init() {}
+public struct TreeStructureBuilder<Result: TreeItemResult, Item: TreeItem> {
+    private let itemMapper: (Item) -> Result
 
-    @ObservableState
-    public struct State: Equatable {
-        var items: IdentifiedArrayOf<MenuItemFeature.State> = []
-
-        public init() {}
+    public init(itemMapper: @escaping (Item) -> Result) {
+        self.itemMapper = itemMapper
     }
 
-    public enum Action {
-        case delegate(Delegate)
-        case onFirstAppear
-        case didLoadMenu([MenuItemFeature.State])
-        case dismiss
-        case items(IdentifiedActionOf<MenuItemFeature>)
-    }
+    public func buildTree(_ flatItems: [Item]) -> [Result] {
+        // 1. Build flat lookup map
+        var lookup: [String: Result] = [:]
 
-    @Dependency(\.menuFeatureClient.log) private var log
-    @Dependency(\.menuFeatureClient.loadMenuItems) private var loadMenuItems
+        for item in flatItems {
+            lookup[item.id] = itemMapper(item)
+        }
 
-    public var body: some Reducer<State, Action> {
-        Reduce { state, action in
-            switch action {
-            case .onFirstAppear:
-                log(.debug, "menu did appear for first time")
-                return loadMenu()
-            case let .didLoadMenu(items):
-                log(.debug, "did load menu")
-                state.items = IdentifiedArrayOf(uniqueElements: items)
-                return .none
-            case .delegate:
-                return .none
-            case .dismiss:
-                return .none
-            case .items(.element(id: _, action: .delegate(.didTapItem(let id)))):
-                deselectAllItems(beside: id, in: &state.items)
-                return .none
-            case .items:
-                return .none
+        // 2. Build child relationships (child ID -> parent ID)
+        for item in flatItems {
+            guard let parentId = item.parentId else { continue }
+            guard var parent = lookup[parentId], let child = lookup[item.id] else { continue }
+
+            // Append child to the parent's children list
+            parent.childrens.append(child)
+            lookup[parentId] = parent
+        }
+
+        // 3. Recursive child population
+        func attachChildren(for node: Result, depth: Int) -> Result {
+            var updatedNode = node
+            updatedNode.depth = depth
+            updatedNode.childrens = node.childrens.compactMap { child in
+                return attachChildren(for: lookup[child.id] ?? child, depth: depth + 1)
             }
+            return updatedNode
         }
-        .forEach(\.items, action: \.items) {
-            MenuItemFeature()
-        }
-    }
 
-    private func deselectAllItems(
-        beside id: String,
-        in items: inout IdentifiedArrayOf<MenuItemFeature.State>
-    ) {
-        for index in items.indices {
-            items[index].isSelected = items[index].id == id
-            deselectAllItems(beside: id, in: &items[index].identifiedArrayOfChildrens)
-        }
-    }
-}
-
-extension MenuFeature {
-    public enum Delegate: Sendable, Equatable {}
-}
-
-private extension MenuFeature {
-    private func loadMenu() -> Effect<Action> {
-        return .run { send in
-            let groups = try? await loadMenuItems()
-            await send(.didLoadMenu(groups ?? []))
-        }
-    }
-}
-
-
-
-
-
-import SwiftUI
-import ComposableArchitecture
-
-public struct MenuView: View {
-    @Bindable var store: StoreOf<MenuFeature>
-
-    public init(store: StoreOf<MenuFeature>) {
-        self.store = store
-    }
-
-    public var body: some View {
-        portraitView
-    }
-
-    var portraitView: some View {
-        ScrollView {
-            VStack(alignment: orientation.isLandscape ? .center : .leading, spacing: 12) {
-                HStack(spacing: 4) {
-                    Image(uiImage: Asset.Assets.orangeLogo.image)
-                    Text(L10n.menuViewTitle)
-                        .foregroundStyle(Asset.Assets.text.swiftUIColor)
-                        .font(.title)
-                        .fontWeight(.bold)
-                    Spacer()
-                    Button(action: {
-                        store.send(.dismiss)
-                    }) {
-                        Image(systemName: "xmark")
-                            .resizable()
-                            .frame(width: 16, height: 16)
-                            .foregroundStyle(Asset.Assets.text.swiftUIColor)
-                    }
-                }
-                .padding(.horizontal, 32)
-                ForEach(
-                    store.scope(
-                        state: \.items,
-                        action: \.items
-                    ),
-                    id: \.state.id
-                ) {
-                    if orientation.isLandscape {
-                        MenuItemLandscapeView(store: $0)
-                    } else {
-                        MenuItemView(store: $0)
-                            .padding(.horizontal, 16)
-                    }
-                }
+        // 4. Collect root nodes and attach full children recursively
+        let rootNodes: [Result] = flatItems
+            .filter { $0.parentId == nil }
+            .compactMap {
+                guard let node = lookup[$0.id] else { return nil }
+                return attachChildren(for: node, depth: 0)
             }
-            .padding(.vertical)
-        }
-        .onAppear {
-            store.send(.onFirstAppear)
-        }
-        .background(
-            Asset.Assets.background.swiftUIColor
-        )
-        .detectOrientation(store.orientation)
+
+        return rootNodes
     }
 }
-
-
-import SwiftUI
-
-struct DetectOrientation: ViewModifier {
-    @Binding var orientation: UIDeviceOrientation
-
-    func body(content: Content) -> some View {
-        content
-            .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-                orientation = UIDevice.current.orientation
-            }
-    }
-}
-
-extension View {
-    func detectOrientation(_ orientation: Binding<UIDeviceOrientation>) -> some View {
-        modifier(DetectOrientation(orientation: orientation))
-    }
-}
-
