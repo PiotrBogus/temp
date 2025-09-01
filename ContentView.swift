@@ -143,3 +143,23 @@ private extension MenuFeature {
         }
     }
 }
+
+
+
+
+
+private func collapseAllExcept(
+    id: String,
+    in items: inout IdentifiedArrayOf<MenuItemFeature.State>
+) {
+    for index in items.indices {
+        if items[index].id == id {
+            // keep it as is, but recurse into children
+            collapseAllExcept(id: id, in: &items[index].identifiedArrayOfChildrens)
+        } else {
+            // collapse everything else
+            items[index].isExpanded = false
+            collapseAllExcept(id: id, in: &items[index].identifiedArrayOfChildrens)
+        }
+    }
+}
