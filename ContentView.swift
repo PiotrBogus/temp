@@ -148,32 +148,84 @@ private extension MenuFeature {
 
 
 
-private func keepAncestorsAndCollapseOthers(
-    expandedId: String,
-    in items: inout IdentifiedArrayOf<MenuItemFeature.State>
-) -> Bool {
-    var found = false
-    
-    for index in items.indices {
-        if items[index].id == expandedId {
-            // ✅ Expanded item stays as is
-            found = true
-            // Also recurse into its children (no-op unless tapping deeper levels)
-            _ = keepAncestorsAndCollapseOthers(expandedId: expandedId, in: &items[index].identifiedArrayOfChildrens)
-        } else {
-            // 🔍 Check if expandedId is in this item's descendants
-            let childHasExpanded = keepAncestorsAndCollapseOthers(expandedId: expandedId, in: &items[index].identifiedArrayOfChildrens)
-            
-            if childHasExpanded {
-                // ✅ This is an ancestor → keep expanded
-                items[index].isExpanded = true
-                found = true
-            } else {
-                // ❌ Not ancestor or expanded → collapse
-                items[index].isExpanded = false
-            }
-        }
+import SwiftUI
+import ComposableArchitecture
+
+public struct MenuView: View {
+    @Bindable var store: StoreOf<MenuFeature>
+
+    public init(store: StoreOf<MenuFeature>) {
+        self.store = store
     }
-    
-    return found
+
+    public var body: some View {
+        portraitView
+    }
+
+    var portraitView: some View {
+        ScrollView {
+            VStack(alignment: orientation.isLandscape ? .center : .leading, spacing: 12) {
+                HStack(spacing: 4) {
+                    Image(uiImage: Asset.Assets.orangeLogo.image)
+                    Text(L10n.menuViewTitle)
+                        .foregroundStyle(Asset.Assets.text.swiftUIColor)
+                        .font(.title)
+                        .fontWeight(.bold)
+                    Spacer()
+                    Button(action: {
+                        store.send(.dismiss)
+                    }) {
+                        Image(systemName: "xmark")
+                            .resizable()
+                            .frame(width: 16, height: 16)
+                            .foregroundStyle(Asset.Assets.text.swiftUIColor)
+                    }
+                }
+                .padding(.horizontal, 32)
+                ForEach(
+                    store.scope(
+                        state: \.items,
+                        action: \.items
+                    ),
+                    id: \.state.id
+                ) {
+                    if orientation.isLandscape {
+                        MenuItemLandscapeView(store: $0)
+                    } else {
+                        MenuItemView(store: $0)
+                            .padding(.horizontal, 16)
+                    }
+                }
+            }
+            .padding(.vertical)
+        }
+        .onAppear {
+            store.send(.onFirstAppear)
+        }
+        .background(
+            Asset.Assets.background.swiftUIColor
+        )
+        .detectOrientation(store.orientation)
+    }
 }
+
+
+import SwiftUI
+
+struct DetectOrientation: ViewModifier {
+    @Binding var orientation: UIDeviceOrientation
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+                orientation = UIDevice.current.orientation
+            }
+    }
+}
+
+extension View {
+    func detectOrientation(_ orientation: Binding<UIDeviceOrientation>) -> some View {
+        modifier(DetectOrientation(orientation: orientation))
+    }
+}
+
