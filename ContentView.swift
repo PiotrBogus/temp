@@ -9,41 +9,54 @@ public struct TreeStructureBuilder<Result: TreeItemResult, Item: TreeItem> {
     }
 
     public func buildTree(_ flatItems: [Item]) -> [Result] {
-        // 1. Build flat lookup map
-        var lookup: [String: Result] = [:]
+        var lookup = makeLookup(from: flatItems)
+        establishParentChildRelationships(in: &lookup, from: flatItems)
+        return buildRootNodes(from: flatItems, using: lookup)
+    }
 
-        for item in flatItems {
+    // MARK: - Step 1: Build Lookup
+    private func makeLookup(from items: [Item]) -> [String: Result] {
+        var lookup: [String: Result] = [:]
+        for item in items {
             lookup[item.id] = itemMapper(item)
         }
+        return lookup
+    }
 
-        // 2. Build child relationships (child ID -> parent ID)
-        for item in flatItems {
-            guard let parentId = item.parentId else { continue }
-            guard var parent = lookup[parentId], let child = lookup[item.id] else { continue }
+    // MARK: - Step 2: Establish Parent-Child Relationships
+    private func establishParentChildRelationships(
+        in lookup: inout [String: Result],
+        from items: [Item]
+    ) {
+        for item in items {
+            guard let parentId = item.parentId,
+                  var parent = lookup[parentId],
+                  let child = lookup[item.id]
+            else { continue }
 
-            // Append child to the parent's children list
             parent.childrens.append(child)
             lookup[parentId] = parent
         }
+    }
 
-        // 3. Recursive child population
-        func attachChildren(for node: Result, depth: Int) -> Result {
-            var updatedNode = node
-            updatedNode.depth = depth
-            updatedNode.childrens = node.childrens.compactMap { child in
-                return attachChildren(for: lookup[child.id] ?? child, depth: depth + 1)
-            }
-            return updatedNode
+    // MARK: - Step 3: Recursive Child Attachment
+    private func attachChildren(for node: Result, depth: Int, using lookup: [String: Result]) -> Result {
+        var updatedNode = node
+        updatedNode.depth = depth
+        updatedNode.childrens = node.childrens.compactMap { child in
+            let resolvedChild = lookup[child.id] ?? child
+            return attachChildren(for: resolvedChild, depth: depth + 1, using: lookup)
         }
+        return updatedNode
+    }
 
-        // 4. Collect root nodes and attach full children recursively
-        let rootNodes: [Result] = flatItems
+    // MARK: - Step 4: Build Root Nodes
+    private func buildRootNodes(from items: [Item], using lookup: [String: Result]) -> [Result] {
+        items
             .filter { $0.parentId == nil }
             .compactMap {
                 guard let node = lookup[$0.id] else { return nil }
-                return attachChildren(for: node, depth: 0)
+                return attachChildren(for: node, depth: 0, using: lookup)
             }
-
-        return rootNodes
     }
 }
