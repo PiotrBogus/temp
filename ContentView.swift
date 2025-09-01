@@ -148,18 +148,32 @@ private extension MenuFeature {
 
 
 
-private func collapseAllExcept(
-    id: String,
+private func keepAncestorsAndCollapseOthers(
+    expandedId: String,
     in items: inout IdentifiedArrayOf<MenuItemFeature.State>
-) {
+) -> Bool {
+    var found = false
+    
     for index in items.indices {
-        if items[index].id == id {
-            // keep it as is, but recurse into children
-            collapseAllExcept(id: id, in: &items[index].identifiedArrayOfChildrens)
+        if items[index].id == expandedId {
+            // ✅ Expanded item stays as is
+            found = true
+            // Also recurse into its children (no-op unless tapping deeper levels)
+            _ = keepAncestorsAndCollapseOthers(expandedId: expandedId, in: &items[index].identifiedArrayOfChildrens)
         } else {
-            // collapse everything else
-            items[index].isExpanded = false
-            collapseAllExcept(id: id, in: &items[index].identifiedArrayOfChildrens)
+            // 🔍 Check if expandedId is in this item's descendants
+            let childHasExpanded = keepAncestorsAndCollapseOthers(expandedId: expandedId, in: &items[index].identifiedArrayOfChildrens)
+            
+            if childHasExpanded {
+                // ✅ This is an ancestor → keep expanded
+                items[index].isExpanded = true
+                found = true
+            } else {
+                // ❌ Not ancestor or expanded → collapse
+                items[index].isExpanded = false
+            }
         }
     }
+    
+    return found
 }
