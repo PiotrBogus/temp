@@ -1,62 +1,69 @@
-import Domain
-import Foundation
+import XCTest
+import ComposableArchitecture
+@testable import YourModuleName
 
-public struct TreeStructureBuilder<Result: TreeItemResult, Item: TreeItem> {
-    private let itemMapper: (Item) -> Result
+@MainActor
+final class CarPlayAccountSelectionReducerTests: XCTestCase {
+    func testOnAccountSelection_SendsDelegateWithAccount() async {
+        let store = TestStore(
+            initialState: CarPlayAccountSelectionReducer.State(),
+            reducer: { CarPlayAccountSelectionReducer() }
+        )
 
-    public init(itemMapper: @escaping (Item) -> Result) {
-        self.itemMapper = itemMapper
+        await store.send(.onAccountSelection(.fixtureDefault))
+        await store.receive(.delegate(.dismissAccountSelection(.fixtureDefault)))
     }
 
-    public func buildTree(_ flatItems: [Item]) -> [Result] {
-        var lookup = makeLookup(from: flatItems)
-        establishParentChildRelationships(in: &lookup, from: flatItems)
-        return buildRootNodes(from: flatItems, using: lookup)
+    func testDidPop_SendsDelegateWithNil() async {
+        let store = TestStore(
+            initialState: CarPlayAccountSelectionReducer.State(),
+            reducer: { CarPlayAccountSelectionReducer() }
+        )
+
+        await store.send(.didPop)
+        await store.receive(.delegate(.dismissAccountSelection(nil)))
     }
 
-    // MARK: - Step 1: Build Lookup
-    private func makeLookup(from items: [Item]) -> [String: Result] {
-        var lookup: [String: Result] = [:]
-        for item in items {
-            lookup[item.id] = itemMapper(item)
-        }
-        return lookup
+    func testDelegate_DoesNotMutateState() async {
+        let state = CarPlayAccountSelectionReducer.State(
+            templateState: .didAppear,
+            accounts: [.fixtureDefault, .fixtureSecondary]
+        )
+
+        let store = TestStore(
+            initialState: state,
+            reducer: { CarPlayAccountSelectionReducer() }
+        )
+
+        await store.send(.delegate(.dismissAccountSelection(.fixtureSecondary)))
+        // brak zmian w stanie i brak dalszych efektów
     }
+}
 
-    // MARK: - Step 2: Establish Parent-Child Relationships
-    private func establishParentChildRelationships(
-        in lookup: inout [String: Result],
-        from items: [Item]
-    ) {
-        for item in items {
-            guard let parentId = item.parentId,
-                  var parent = lookup[parentId],
-                  let child = lookup[item.id]
-            else { continue }
 
-            parent.childrens.append(child)
-            lookup[parentId] = parent
-        }
-    }
+@testable import YourModuleName
 
-    // MARK: - Step 3: Recursive Child Attachment
-    private func attachChildren(for node: Result, depth: Int, using lookup: [String: Result]) -> Result {
-        var updatedNode = node
-        updatedNode.depth = depth
-        updatedNode.childrens = node.childrens.compactMap { child in
-            let resolvedChild = lookup[child.id] ?? child
-            return attachChildren(for: resolvedChild, depth: depth + 1, using: lookup)
-        }
-        return updatedNode
-    }
+extension CarPlayParkingsAccount {
+    static let fixtureDefault = CarPlayParkingsAccount(
+        "001",
+        name: "Default Account",
+        digest: "digest-001",
+        isDefault: true
+    )
 
-    // MARK: - Step 4: Build Root Nodes
-    private func buildRootNodes(from items: [Item], using lookup: [String: Result]) -> [Result] {
-        items
-            .filter { $0.parentId == nil }
-            .compactMap {
-                guard let node = lookup[$0.id] else { return nil }
-                return attachChildren(for: node, depth: 0, using: lookup)
-            }
+    static let fixtureSecondary = CarPlayParkingsAccount(
+        "002",
+        name: "Secondary Account",
+        digest: "digest-002",
+        isDefault: false
+    )
+
+    static func fixture(
+        number: String = UUID().uuidString,
+        name: String = "Fixture Account",
+        digest: String = UUID().uuidString,
+        isDefault: Bool = false
+    ) -> CarPlayParkingsAccount {
+        CarPlayParkingsAccount(number, name: name, digest: digest, isDefault: isDefault)
     }
 }
