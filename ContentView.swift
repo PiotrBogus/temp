@@ -2,48 +2,32 @@ import XCTest
 import ComposableArchitecture
 @testable import YourModuleName
 
-final class CarPlayCarSelectionReducerTests: XCTestCase {
+final class CarPlayTimeOptionSelectionReducerTests: XCTestCase {
 
-    // MARK: - Fixtures
-    private let defaultCar = CarPlayParkingsCarListItem(
-        1, extPlateId: "ext1", name: "Default Car", plate: "ABC123", defaultPlate: true
-    )
-    
-    private let secondaryCar = CarPlayParkingsCarListItem(
-        2, extPlateId: "ext2", name: "Secondary Car", plate: "XYZ789", defaultPlate: false
-    )
+    private let timeOption1: CarPlayParkingsTariffTimeOption = .minutes15
+    private let timeOption2: CarPlayParkingsTariffTimeOption = .hour1
+    private let timeOption3: CarPlayParkingsTariffTimeOption = .allDay
 
-    // MARK: - Test onCarSelection
-    func testOnCarSelection_SendsDelegateWithSelectedCar() async {
+    func testInitialState_IsDidAppear() {
         let store = TestStore(
-            initialState: CarPlayCarSelectionReducer.State(cars: [defaultCar, secondaryCar]),
-            reducer: { CarPlayCarSelectionReducer() }
+            initialState: CarPlayTimeOptionSelectionReducer.State(),
+            reducer: { CarPlayTimeOptionSelectionReducer() }
         )
 
-        await store.send(.onCarSelection(defaultCar))
-        await store.receive(.delegate(.dismissCarSelection(defaultCar)))
+        XCTAssertEqual(store.state.templateState, .didAppear)
+        XCTAssertEqual(store.state.timeOptions, [])
     }
 
-    // MARK: - Test didPop
-    func testDidPop_SendsDelegateWithNil() async {
+    func testOnFixedTimeOptionSelection_UpdatesTemplateState() async {
         let store = TestStore(
-            initialState: CarPlayCarSelectionReducer.State(cars: [defaultCar, secondaryCar]),
-            reducer: { CarPlayCarSelectionReducer() }
+            initialState: CarPlayTimeOptionSelectionReducer.State(),
+            reducer: { CarPlayTimeOptionSelectionReducer() }
         )
 
-        await store.send(.didPop)
-        await store.receive(.delegate(.dismissCarSelection(nil)))
-    }
+        let selectedOptions: [CarPlayParkingsTariffTimeOption] = [timeOption1, timeOption2, timeOption3]
 
-    // MARK: - Test delegate action does not mutate state
-    func testDelegate_DoesNotChangeState() async {
-        let initialState = CarPlayCarSelectionReducer.State(cars: [defaultCar, secondaryCar])
-        let store = TestStore(
-            initialState: initialState,
-            reducer: { CarPlayCarSelectionReducer() }
-        )
-
-        await store.send(.delegate(.dismissCarSelection(defaultCar)))
-        XCTAssertEqual(store.state, initialState)
+        await store.send(.onFixedTimeOptionSelection(selectedOptions)) {
+            $0.templateState = .fixedTimeOptionSelection(selectedOptions)
+        }
     }
 }
