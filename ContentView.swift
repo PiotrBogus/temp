@@ -67,11 +67,11 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
                 $0.templateState = .loading("Loading")
             }
 
-            await store.receive(.onCheckRequirementsSuccess)
-            await store.receive(.onLoadParkingDataSuccess)
-            await store.receive(.onCheckMobiletIdAndCarListSuccess)
-            await store.receive(.onCheckLocationPermissionSuccess)
-            await store.receive(.onInactiveTicket)
+            await store.receive(.onCheckRequirementsSuccess, timeout: 1)
+            await store.receive(.onLoadParkingDataSuccess, timeout: 1)
+            await store.receive(.onCheckMobiletIdAndCarListSuccess, timeout: 1)
+            await store.receive(.onCheckLocationPermissionSuccess, timeout: 1)
+            await store.receive(.onInactiveTicket, timeout: 1)
         }
     }
 
@@ -89,7 +89,7 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
                 $0.templateState = .loading("Loading")
             }
 
-            await store.receive(.onCheckRequirementsError("Requirements failed")) {
+            await store.receive(.onCheckRequirementsError("Requirements failed"), timeout: 1) {
                 $0.templateState = .error(
                     .init(
                         type: .checkRequirementsError,
@@ -119,8 +119,8 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
                 $0.templateState = .loading("Loading")
             }
 
-            await store.receive(.onCheckRequirementsSuccess)
-            await store.receive(.onLoadParkingDataError(errorMessage: "The operation couldn’t be completed. (Test error 1.)")) {
+            await store.receive(.onCheckRequirementsSuccess, timeout: 1)
+            await store.receive(.onLoadParkingDataError(errorMessage: "The operation couldn’t be completed. (Test error 1.)"), timeout: 1) {
                 $0.templateState = .error(.init(
                     type: .loadParkingDataError,
                     title: "The operation couldn’t be completed. (Test error 1.)",
@@ -149,9 +149,9 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
                 $0.templateState = .loading("Loading")
             }
 
-            await store.receive(.onCheckRequirementsSuccess)
-            await store.receive(.onLoadParkingDataSuccess)
-            await store.receive(.onCheckMobiletIdAndCarListError) {
+            await store.receive(.onCheckRequirementsSuccess, timeout: 1)
+            await store.receive(.onLoadParkingDataSuccess, timeout: 1)
+            await store.receive(.onCheckMobiletIdAndCarListError, timeout: 1) {
                 $0.templateState = .error(.init(
                     type: .checkMobiletIdAndCarListError,
                     title: "Mobilet not found",
@@ -180,10 +180,10 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
                 $0.templateState = .loading("Loading")
             }
 
-            await store.receive(.onCheckRequirementsSuccess)
-            await store.receive(.onLoadParkingDataSuccess)
-            await store.receive(.onCheckMobiletIdAndCarListSuccess)
-            await store.receive(.onCheckLocationPermissionError) {
+            await store.receive(.onCheckRequirementsSuccess, timeout: 1)
+            await store.receive(.onLoadParkingDataSuccess, timeout: 1)
+            await store.receive(.onCheckMobiletIdAndCarListSuccess, timeout: 1)
+            await store.receive(.onCheckLocationPermissionError, timeout: 1) {
                 $0.templateState = .error(.init(
                     type: .locationPermissionError,
                     title: "Location Off",
@@ -208,11 +208,11 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
                 $0.templateState = .loading("Loading")
             }
 
-            await store.receive(.onCheckRequirementsSuccess)
-            await store.receive(.onLoadParkingDataSuccess)
-            await store.receive(.onCheckMobiletIdAndCarListSuccess)
-            await store.receive(.onCheckLocationPermissionSuccess)
-            await store.receive(.onCheckLocationPermissionError) // fallback z powodu getLocation error
+            await store.receive(.onCheckRequirementsSuccess, timeout: 1)
+            await store.receive(.onLoadParkingDataSuccess, timeout: 1)
+            await store.receive(.onCheckMobiletIdAndCarListSuccess, timeout: 1)
+            await store.receive(.onCheckLocationPermissionSuccess, timeout: 1)
+            await store.receive(.onCheckLocationPermissionError, timeout: 1)
         }
     }
 
@@ -230,11 +230,11 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
                 $0.templateState = .loading("Loading")
             }
 
-            await store.receive(.onCheckRequirementsSuccess)
-            await store.receive(.onLoadParkingDataSuccess)
-            await store.receive(.onCheckMobiletIdAndCarListSuccess)
-            await store.receive(.onCheckLocationPermissionSuccess)
-            await store.receive(.onInactiveTicket)
+            await store.receive(.onCheckRequirementsSuccess, timeout: 1)
+            await store.receive(.onLoadParkingDataSuccess, timeout: 1)
+            await store.receive(.onCheckMobiletIdAndCarListSuccess, timeout: 1)
+            await store.receive(.onCheckLocationPermissionSuccess, timeout: 1)
+            await store.receive(.onInactiveTicket, timeout: 1)
         }
     }
 }
