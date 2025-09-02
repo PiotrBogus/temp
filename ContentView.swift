@@ -2,32 +2,62 @@ import XCTest
 import ComposableArchitecture
 @testable import YourModuleName
 
-final class CarPlayTimeOptionSelectionReducerTests: XCTestCase {
+final class CarPlayZoneSelectionReducerTests: XCTestCase {
 
-    private let timeOption1: CarPlayParkingsTariffTimeOption = .minutes15
-    private let timeOption2: CarPlayParkingsTariffTimeOption = .hour1
-    private let timeOption3: CarPlayParkingsTariffTimeOption = .allDay
+    // MARK: - Fixtures
+    private let fixtureLocation = CarPlayParkingsLocation(latitude: 52.0, longitude: 21.0)
+    private let fixtureTariff = CarPlayParkingsTarrifListItem(
+        id: "t1",
+        name: "Tariff 1",
+        price: "5.00"
+    )
 
-    func testInitialState_IsDidAppear() {
+    private lazy var fixtureCity = CarPlayParkingsCity(
+        name: "Warsaw",
+        extCityId: "001",
+        location: fixtureLocation,
+        distance: "1km",
+        tarrifs: [fixtureTariff],
+        canLocateSubareaWithGps: true
+    )
+
+    private let fixtureZone = CarPlayParkingsSubareaListItem(
+        id: "z1",
+        name: "Zone 1",
+        distance: "0.5km"
+    )
+
+    // MARK: - Test onZoneSelection
+    func testOnZoneSelection_SendsDelegateWithSelectedZone() async {
         let store = TestStore(
-            initialState: CarPlayTimeOptionSelectionReducer.State(),
-            reducer: { CarPlayTimeOptionSelectionReducer() }
+            initialState: CarPlayZoneSelectionReducer.State(city: fixtureCity),
+            reducer: { CarPlayZoneSelectionReducer() }
         )
 
-        XCTAssertEqual(store.state.templateState, .didAppear)
-        XCTAssertEqual(store.state.timeOptions, [])
+        await store.send(.onZoneSelection(fixtureZone))
+        await store.receive(.delegate(.dismissZoneSelection(fixtureZone)))
     }
 
-    func testOnFixedTimeOptionSelection_UpdatesTemplateState() async {
+    // MARK: - Test didPop
+    func testDidPop_SendsDelegateWithNil() async {
         let store = TestStore(
-            initialState: CarPlayTimeOptionSelectionReducer.State(),
-            reducer: { CarPlayTimeOptionSelectionReducer() }
+            initialState: CarPlayZoneSelectionReducer.State(city: fixtureCity),
+            reducer: { CarPlayZoneSelectionReducer() }
         )
 
-        let selectedOptions: [CarPlayParkingsTariffTimeOption] = [timeOption1, timeOption2, timeOption3]
+        await store.send(.didPop)
+        await store.receive(.delegate(.dismissZoneSelection(nil)))
+    }
 
-        await store.send(.onFixedTimeOptionSelection(selectedOptions)) {
-            $0.templateState = .fixedTimeOptionSelection(selectedOptions)
-        }
+    // MARK: - Test delegate action does not change state
+    func testDelegate_DoesNotChangeState() async {
+        let initialState = CarPlayZoneSelectionReducer.State(city: fixtureCity)
+        let store = TestStore(
+            initialState: initialState,
+            reducer: { CarPlayZoneSelectionReducer() }
+        )
+
+        await store.send(.delegate(.dismissZoneSelection(fixtureZone)))
+        XCTAssertEqual(store.state, initialState)
     }
 }
