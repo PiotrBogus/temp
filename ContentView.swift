@@ -1,63 +1,51 @@
-import XCTest
-import ComposableArchitecture
+import Foundation
 @testable import YourModuleName
 
-final class CarPlayZoneSelectionReducerTests: XCTestCase {
+public extension CarPlayParkingsSubareaTime {
+    static let morning: CarPlayParkingsSubareaTime = .init(display: "08:00", hours: 8, minutes: 0)
+    static let afternoon: CarPlayParkingsSubareaTime = .init(display: "14:00", hours: 14, minutes: 0)
+    static let evening: CarPlayParkingsSubareaTime = .init(display: "18:00", hours: 18, minutes: 0)
+}
 
-    // MARK: - Fixtures
-    private let fixtureLocation = CarPlayParkingsLocation(latitude: 52.0, longitude: 21.0)
-    private let fixtureTariff = CarPlayParkingsTarrifListItem(
-        id: "t1",
-        name: "Tariff 1",
-        price: "5.00"
+public extension CarPlayParkingsSubareaListItem {
+
+    static let fixtureDefault: CarPlayParkingsSubareaListItem = .init(
+        name: "Default Zone",
+        timeOptions: [.startStop, .minutes15, .hour1],
+        tariffId: 1,
+        extTariffId: "T1",
+        subareaId: 101,
+        extSubareaId: "S101",
+        startTime: .morning,
+        endTime: .afternoon,
+        allDay: false
     )
 
-    private lazy var fixtureCity = CarPlayParkingsCity(
-        name: "Warsaw",
-        extCityId: "001",
-        location: fixtureLocation,
-        distance: "1km",
-        tarrifs: [fixtureTariff],
-        canLocateSubareaWithGps: true
+    static let fixtureAllDay: CarPlayParkingsSubareaListItem = .init(
+        name: "All Day Zone",
+        timeOptions: [.allDay],
+        tariffId: 2,
+        extTariffId: "T2",
+        subareaId: 102,
+        extSubareaId: "S102",
+        startTime: .morning,
+        endTime: .evening,
+        allDay: true
     )
 
-    private let fixtureZone = CarPlayParkingsSubareaListItem(
-        id: "z1",
-        name: "Zone 1",
-        distance: "0.5km"
-    )
-
-    // MARK: - Test onZoneSelection
-    func testOnZoneSelection_SendsDelegateWithSelectedZone() async {
-        let store = TestStore(
-            initialState: CarPlayZoneSelectionReducer.State(city: fixtureCity),
-            reducer: { CarPlayZoneSelectionReducer() }
+    static let fixtureMultiple: [CarPlayParkingsSubareaListItem] = [
+        .fixtureDefault,
+        .fixtureAllDay,
+        .init(
+            name: "Evening Zone",
+            timeOptions: [.hour2, .hour4],
+            tariffId: 3,
+            extTariffId: "T3",
+            subareaId: 103,
+            extSubareaId: "S103",
+            startTime: .afternoon,
+            endTime: .evening,
+            allDay: false
         )
-
-        await store.send(.onZoneSelection(fixtureZone))
-        await store.receive(.delegate(.dismissZoneSelection(fixtureZone)))
-    }
-
-    // MARK: - Test didPop
-    func testDidPop_SendsDelegateWithNil() async {
-        let store = TestStore(
-            initialState: CarPlayZoneSelectionReducer.State(city: fixtureCity),
-            reducer: { CarPlayZoneSelectionReducer() }
-        )
-
-        await store.send(.didPop)
-        await store.receive(.delegate(.dismissZoneSelection(nil)))
-    }
-
-    // MARK: - Test delegate action does not change state
-    func testDelegate_DoesNotChangeState() async {
-        let initialState = CarPlayZoneSelectionReducer.State(city: fixtureCity)
-        let store = TestStore(
-            initialState: initialState,
-            reducer: { CarPlayZoneSelectionReducer() }
-        )
-
-        await store.send(.delegate(.dismissZoneSelection(fixtureZone)))
-        XCTAssertEqual(store.state, initialState)
-    }
+    ]
 }
