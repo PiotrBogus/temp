@@ -1,36 +1,240 @@
+import XCTest
 import ComposableArchitecture
 import MapKit
+@testable import YourModuleName
 
-extension CarPlayEntryPointReducer.Action: Equatable {
-    public static func == (lhs: CarPlayEntryPointReducer.Action, rhs: CarPlayEntryPointReducer.Action) -> Bool {
-        switch (lhs, rhs) {
-        case (.onAppear, .onAppear),
-             (.refresh, .refresh),
-             (.onCheckRequirementsSuccess, .onCheckRequirementsSuccess),
-             (.onLoadParkingDataSuccess, .onLoadParkingDataSuccess),
-             (.onCheckMobiletIdAndCarListSuccess, .onCheckMobiletIdAndCarListSuccess),
-             (.onCheckLocationPermissionSuccess, .onCheckLocationPermissionSuccess),
-             (.onCheckLocationPermissionError, .onCheckLocationPermissionError),
-             (.onInactiveTicket, .onInactiveTicket):
-            return true
+// MARK: - Fixtures
 
-        case let (.onErrorButtonTap(a), .onErrorButtonTap(b)):
-            return a == b
+extension MKMapItem {
+    static var mock: MKMapItem {
+        MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: 0, longitude: 0)))
+    }
+}
 
-        case let (.onCheckRequirementsError(a), .onCheckRequirementsError(b)),
-             let (.onLoadParkingDataError(errorMessage: a), .onLoadParkingDataError(errorMessage: b)):
-            return a == b
+extension CarPlayParkingsTicketListItem {
+    static var fixtureDefault: CarPlayParkingsTicketListItem {
+        CarPlayParkingsTicketListItem(ticketId: 1, plate: "XYZ123", startTime: Date(), endTime: Date())
+    }
+}
 
-        case let (.onActiveTicket(ticket1, _), .onActiveTicket(ticket2, _)):
-            // Porównujemy tylko ticket, ignorujemy MKMapItem dla testów
-            return ticket1 == ticket2
+// MARK: - Mock EntryPointClient
 
-        case let (.destination(lhsDest), .destination(rhsDest)):
-            // Porównujemy tylko enum cases, nie stan wewnątrz destination
-            return lhsDest == rhsDest
+struct MockEntryPointClient {
+    static func make(
+        checkRequirementsResult: String? = nil,
+        getParkingDataSucceeds: Bool = true,
+        mobiletIdExists: Bool = true,
+        locationEnabled: Bool = true,
+        hasActiveTicket: Bool = false,
+        getLocationThrows: Bool = false
+    ) -> CarPlayEntryPointReducerClient {
+        
+        CarPlayEntryPointReducerClient(
+            checkRequirements: { checkRequirementsResult },
+            getParkingData: {
+                if getParkingDataSucceeds { return }
+                else { throw NSError(domain: "Test", code: 1) }
+            },
+            checkMobiletIdAndCarList: {
+                if mobiletIdExists { return }
+                else { throw CarPlayError.mobiletNotFound }
+            },
+            checkLocationPermissions: { locationEnabled ? .enabled : .disabled },
+            getActiveTicket: { hasActiveTicket ? CarPlayParkingsTicketListItem.fixtureDefault : nil },
+            getLocation: {
+                if getLocationThrows { throw NSError(domain: "Test", code: 2) }
+                else { return .mock }
+            }
+        )
+    }
+}
 
-        default:
-            return false
+// MARK: - Tests
+
+final class CarPlayEntryPointReducerTests: XCTestCase {
+
+    func testOnAppear_FullSuccessfulFlow() async {
+        let store = TestStore(
+            initialState: CarPlayEntryPointReducer.State(),
+            reducer: { CarPlayEntryPointReducer() }
+        )
+
+        await withDependencies {
+            $0.entryPointReducerClient = MockEntryPointClient.make()
+            $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(loadingSplashText: "Loading")
+        } operation: {
+            await store.send(.onAppear) {
+                $0.templateState = .loading("Loading")
+            }
+
+            await store.receive(.onCheckRequirementsSuccess)
+            await store.receive(.onLoadParkingDataSuccess)
+            await store.receive(.onCheckMobiletIdAndCarListSuccess)
+            await store.receive(.onCheckLocationPermissionSuccess)
+            await store.receive(.onInactiveTicket)
+        }
+    }
+
+    func testCheckRequirementsError() async {
+        let store = TestStore(
+            initialState: CarPlayEntryPointReducer.State(),
+            reducer: { CarPlayEntryPointReducer() }
+        )
+
+        await withDependencies {
+            $0.entryPointReducerClient = MockEntryPointClient.make(checkRequirementsResult: "Requirements failed")
+            $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(alertButtonTryAgainText: "Retry")
+        } operation: {
+            await store.send(.onAppear) {
+                $0.templateState = .loading("Loading")
+            }
+
+            await store.receive(.onCheckRequirementsError("Requirements failed")) {
+                $0.templateState = .error(
+                    .init(
+                        type: .checkRequirementsError,
+                        title: "Requirements failed",
+                        description: nil,
+                        buttonTitle: "Retry"
+                    )
+                )
+            }
+        }
+    }
+
+    func testLoadParkingDataError() async {
+        let store = TestStore(
+            initialState: CarPlayEntryPointReducer.State(),
+            reducer: { CarPlayEntryPointReducer() }
+        )
+
+        await withDependencies {
+            $0.entryPointReducerClient = MockEntryPointClient.make(getParkingDataSucceeds: false)
+            $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(
+                alertButtonTryAgainText: "Retry",
+                loadingSplashText: "Loading"
+            )
+        } operation: {
+            await store.send(.onAppear) {
+                $0.templateState = .loading("Loading")
+            }
+
+            await store.receive(.onCheckRequirementsSuccess)
+            await store.receive(.onLoadParkingDataError(errorMessage: "The operation couldn’t be completed. (Test error 1.)")) {
+                $0.templateState = .error(.init(
+                    type: .loadParkingDataError,
+                    title: "The operation couldn’t be completed. (Test error 1.)",
+                    description: nil,
+                    buttonTitle: "Retry"
+                ))
+            }
+        }
+    }
+
+    func testMobiletIdAndCarListError() async {
+        let store = TestStore(
+            initialState: CarPlayEntryPointReducer.State(),
+            reducer: { CarPlayEntryPointReducer() }
+        )
+
+        await withDependencies {
+            $0.entryPointReducerClient = MockEntryPointClient.make(mobiletIdExists: false)
+            $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(
+                alertButtonTryAgainText: "Retry",
+                mobiletNotFoundText: "Mobilet not found",
+                loadingSplashText: "Loading"
+            )
+        } operation: {
+            await store.send(.onAppear) {
+                $0.templateState = .loading("Loading")
+            }
+
+            await store.receive(.onCheckRequirementsSuccess)
+            await store.receive(.onLoadParkingDataSuccess)
+            await store.receive(.onCheckMobiletIdAndCarListError) {
+                $0.templateState = .error(.init(
+                    type: .checkMobiletIdAndCarListError,
+                    title: "Mobilet not found",
+                    description: nil,
+                    buttonTitle: "Retry"
+                ))
+            }
+        }
+    }
+
+    func testCheckLocationPermissionError() async {
+        let store = TestStore(
+            initialState: CarPlayEntryPointReducer.State(),
+            reducer: { CarPlayEntryPointReducer() }
+        )
+
+        await withDependencies {
+            $0.entryPointReducerClient = MockEntryPointClient.make(locationEnabled: false)
+            $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(
+                alertButtonTryAgainText: "Retry",
+                loadingSplashText: "Loading",
+                locationDisabledText: "Location Off"
+            )
+        } operation: {
+            await store.send(.onAppear) {
+                $0.templateState = .loading("Loading")
+            }
+
+            await store.receive(.onCheckRequirementsSuccess)
+            await store.receive(.onLoadParkingDataSuccess)
+            await store.receive(.onCheckMobiletIdAndCarListSuccess)
+            await store.receive(.onCheckLocationPermissionError) {
+                $0.templateState = .error(.init(
+                    type: .locationPermissionError,
+                    title: "Location Off",
+                    description: nil,
+                    buttonTitle: "Retry"
+                ))
+            }
+        }
+    }
+
+    func testActiveTicketGetLocationError() async {
+        let store = TestStore(
+            initialState: CarPlayEntryPointReducer.State(),
+            reducer: { CarPlayEntryPointReducer() }
+        )
+
+        await withDependencies {
+            $0.entryPointReducerClient = MockEntryPointClient.make(hasActiveTicket: true, getLocationThrows: true)
+            $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(loadingSplashText: "Loading")
+        } operation: {
+            await store.send(.onAppear) {
+                $0.templateState = .loading("Loading")
+            }
+
+            await store.receive(.onCheckRequirementsSuccess)
+            await store.receive(.onLoadParkingDataSuccess)
+            await store.receive(.onCheckMobiletIdAndCarListSuccess)
+            await store.receive(.onCheckLocationPermissionSuccess)
+            await store.receive(.onCheckLocationPermissionError) // fallback z powodu getLocation error
+        }
+    }
+
+    func testInactiveTicketFlow() async {
+        let store = TestStore(
+            initialState: CarPlayEntryPointReducer.State(),
+            reducer: { CarPlayEntryPointReducer() }
+        )
+
+        await withDependencies {
+            $0.entryPointReducerClient = MockEntryPointClient.make(hasActiveTicket: false)
+            $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(loadingSplashText: "Loading")
+        } operation: {
+            await store.send(.onAppear) {
+                $0.templateState = .loading("Loading")
+            }
+
+            await store.receive(.onCheckRequirementsSuccess)
+            await store.receive(.onLoadParkingDataSuccess)
+            await store.receive(.onCheckMobiletIdAndCarListSuccess)
+            await store.receive(.onCheckLocationPermissionSuccess)
+            await store.receive(.onInactiveTicket)
         }
     }
 }
