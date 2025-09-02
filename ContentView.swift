@@ -1,89 +1,100 @@
-
-public protocol CarPlayCoordinating: AnyObject, Sendable {
-    var interfaceController: CPInterfaceController? { get }
-    var didPop: PassthroughSubject<CPTemplate, Never> { get }
-
-    func save(_ interfaceController: CPInterfaceController)
-    func append(_ child: any CarPlayTemplate)
-    func remove(_ child: any CarPlayTemplate)
-    func removeAllChilds()
-    func contains(template: CPTemplate) -> Bool
-}
-
-
-
-
-import Foundation
+import XCTest
 import CarPlay
 import Combine
+import ComposableArchitecture
+@testable import YourModuleName
 
-final class CarPlayCoordinator: NSObject, CarPlayCoordinating {
-    private(set) var interfaceController: CPInterfaceController?
-    private(set) var childTemplate: [any CarPlayTemplate] = []
-    let didPop = PassthroughSubject<CPTemplate, Never>()
+@MainActor
+final class CarPlayAccountSelectionTemplateTests: XCTestCase {
 
-    func save(_ interfaceController: CPInterfaceController) {
-        self.interfaceController = interfaceController
-        self.interfaceController?.delegate = self
+    private var cancellables: Set<AnyCancellable> = []
+
+    // MARK: - Test: push list template on didAppear
+    func testDidAppear_PushesListTemplate() {
+        let coordinator = CarPlayCoordinatorMock()
+        let resourceProvider = CarPlayParkingsResourcesMock(selectAccountTitleText: "Select Account")
+        
+        let store = StoreOf<CarPlayAccountSelectionReducer>(
+            initialState: .fixtureWithAccounts,
+            reducer: { CarPlayAccountSelectionReducer() }
+        )
+        
+        withDependencies {
+            $0.carPlayCoordinator = coordinator
+            $0.carPlayResourceProvider = resourceProvider
+        } operation: {
+            _ = CarPlayAccountSelectionTemplate(store: store)
+        }
+        
+        // Template został pushnięty
+        XCTAssertEqual(coordinator.interfaceControllerMock.pushedTemplates.count, 1)
+        let pushed = coordinator.interfaceControllerMock.pushedTemplates.first
+        XCTAssertTrue(pushed is CPListTemplate)
+        XCTAssertTrue(coordinator.interfaceControllerMock.dismissedAndPushed)
+        
+        // Sprawdzamy tytuł template
+        let listTemplate = pushed as! CPListTemplate
+        XCTAssertEqual(listTemplate.title, "Select Account")
+        XCTAssertEqual(listTemplate.sections.first?.items.count, store.state.accounts.count)
     }
-
-    func append(_ child: any CarPlayTemplate) {
-        childTemplate.append(child)
+    
+    // MARK: - Test: selecting account sends action and removes template
+    func testSelectingAccount_SendsOnAccountSelection() async {
+        let coordinator = CarPlayCoordinatorMock()
+        let resourceProvider = CarPlayParkingsResourcesMock(selectAccountTitleText: "Select Account")
+        
+        let store = TestStore(
+            initialState: .fixtureWithAccounts,
+            reducer: { CarPlayAccountSelectionReducer() }
+        )
+        
+        withDependencies {
+            $0.carPlayCoordinator = coordinator
+            $0.carPlayResourceProvider = resourceProvider
+        } operation: {
+            _ = CarPlayAccountSelectionTemplate(store: store)
+        }
+        
+        // Pobieramy pierwszy item i wywołujemy handler
+        let listTemplate = coordinator.interfaceControllerMock.pushedTemplates.first as! CPListTemplate
+        let firstItem = listTemplate.sections.first!.items.first!
+        
+        let exp = expectation(description: "handler completion")
+        firstItem.handler?(firstItem, { exp.fulfill() })
+        await fulfillment(of: [exp], timeout: 1)
+        
+        await store.receive(.delegate(.dismissAccountSelection(.fixtureDefault)))
+        
+        // Template powinien zostać usunięty
+        XCTAssertTrue(coordinator.removed.contains { $0 as AnyObject === firstItem })
     }
-
-    func remove(_ child: any CarPlayTemplate) {
-        childTemplate.removeAll(where: { $0.id == child.id })
-    }
-
-    func removeAllChilds() {
-        childTemplate.removeAll()
-    }
-
-    func contains(template: CPTemplate) -> Bool {
-        interfaceController?.templates.contains(where: { $0 === template }) ?? false
-    }
-}
-
-extension CarPlayCoordinator: CPInterfaceControllerDelegate {
-    func templateDidDisappear(_ aTemplate: CPTemplate, animated: Bool) {
-        didPop.send(aTemplate)
-    }
-}
-
-
-
-
-
-
-import CarPlay
-import Combine
-
-final class CarPlayCoordinatorMock: CarPlayCoordinating {
-    var interfaceController: CPInterfaceController? = CarPlayInterfaceControllerMock()
-    let didPop = PassthroughSubject<CPTemplate, Never>()
-
-    private(set) var appended: [any CarPlayTemplate] = []
-    private(set) var removed: [any CarPlayTemplate] = []
-    private(set) var removedAllCalled = false
-    var containsTemplates: Set<CPTemplate> = []
-
-    func save(_ interfaceController: CPInterfaceController) {
-        self.interfaceController = interfaceController
-    }
-
-    func append(_ child: any CarPlayTemplate) {
-        appended.append(child)
-    }
-
-    func remove(_ child: any CarPlayTemplate) {
-        removed.append(child)
-    }
-
-    func removeAllChilds() {
-        removedAllCalled = true
-    }
-
-    func contains(template: CPTemplate) -> Bool {
-        containsTemplates.contains { $0 === template }
+    
+    // MARK: - Test: didPop triggers didPop action and clears mainTemplate
+    func testDidPop_SendsDidPop() async {
+        let coordinator = CarPlayCoordinatorMock()
+        let resourceProvider = CarPlayParkingsResourcesMock(selectAccountTitleText: "Select Account")
+        
+        let store = TestStore(
+            initialState: .fixtureWithAccounts,
+            reducer: { CarPlayAccountSelectionReducer() }
+        )
+        
+        var templateRef: CPListTemplate? = nil
+        withDependencies {
+            $0.carPlayCoordinator = coordinator
+            $0.carPlayResourceProvider = resourceProvider
+        } operation: {
+            let template = CarPlayAccountSelectionTemplate(store: store)
+            // Pobieramy mainTemplate dla sprawdzenia
+            templateRef = template.mainTemplate as? CPListTemplate
+        }
+        
+        // symulacja, że template zniknął z interfejsu
+        coordinator.containsTemplates = []
+        if let template = templateRef {
+            coordinator.simulateDidPop(template: template)
+        }
+        
+        await store.receive(.didPop)
     }
 }
