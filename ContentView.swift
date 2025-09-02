@@ -49,20 +49,20 @@ struct MockEntryPointClient {
     }
 }
 
-// MARK: - Tests
+// MARK: - Test Class
 
 final class CarPlayEntryPointReducerTests: XCTestCase {
 
-    func testOnAppear_FullSuccessfulFlow() async {
-        let store = TestStore(
-            initialState: CarPlayEntryPointReducer.State(),
-            reducer: { CarPlayEntryPointReducer() }
-        )
-
+    func testOnAppear_FullSuccessFlow() async {
         await withDependencies {
             $0.entryPointReducerClient = MockEntryPointClient.make()
             $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(loadingSplashText: "Loading")
         } operation: {
+            let store = TestStore(
+                initialState: CarPlayEntryPointReducer.State(),
+                reducer: CarPlayEntryPointReducer()
+            )
+
             await store.send(.onAppear) {
                 $0.templateState = .loading("Loading")
             }
@@ -76,15 +76,15 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
     }
 
     func testCheckRequirementsError() async {
-        let store = TestStore(
-            initialState: CarPlayEntryPointReducer.State(),
-            reducer: { CarPlayEntryPointReducer() }
-        )
-
         await withDependencies {
             $0.entryPointReducerClient = MockEntryPointClient.make(checkRequirementsResult: "Requirements failed")
             $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(alertButtonTryAgainText: "Retry")
         } operation: {
+            let store = TestStore(
+                initialState: CarPlayEntryPointReducer.State(),
+                reducer: CarPlayEntryPointReducer()
+            )
+
             await store.send(.onAppear) {
                 $0.templateState = .loading("Loading")
             }
@@ -103,11 +103,6 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
     }
 
     func testLoadParkingDataError() async {
-        let store = TestStore(
-            initialState: CarPlayEntryPointReducer.State(),
-            reducer: { CarPlayEntryPointReducer() }
-        )
-
         await withDependencies {
             $0.entryPointReducerClient = MockEntryPointClient.make(getParkingDataSucceeds: false)
             $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(
@@ -115,6 +110,11 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
                 loadingSplashText: "Loading"
             )
         } operation: {
+            let store = TestStore(
+                initialState: CarPlayEntryPointReducer.State(),
+                reducer: CarPlayEntryPointReducer()
+            )
+
             await store.send(.onAppear) {
                 $0.templateState = .loading("Loading")
             }
@@ -132,11 +132,6 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
     }
 
     func testMobiletIdAndCarListError() async {
-        let store = TestStore(
-            initialState: CarPlayEntryPointReducer.State(),
-            reducer: { CarPlayEntryPointReducer() }
-        )
-
         await withDependencies {
             $0.entryPointReducerClient = MockEntryPointClient.make(mobiletIdExists: false)
             $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(
@@ -145,6 +140,11 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
                 loadingSplashText: "Loading"
             )
         } operation: {
+            let store = TestStore(
+                initialState: CarPlayEntryPointReducer.State(),
+                reducer: CarPlayEntryPointReducer()
+            )
+
             await store.send(.onAppear) {
                 $0.templateState = .loading("Loading")
             }
@@ -163,11 +163,6 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
     }
 
     func testCheckLocationPermissionError() async {
-        let store = TestStore(
-            initialState: CarPlayEntryPointReducer.State(),
-            reducer: { CarPlayEntryPointReducer() }
-        )
-
         await withDependencies {
             $0.entryPointReducerClient = MockEntryPointClient.make(locationEnabled: false)
             $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(
@@ -176,6 +171,11 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
                 locationDisabledText: "Location Off"
             )
         } operation: {
+            let store = TestStore(
+                initialState: CarPlayEntryPointReducer.State(),
+                reducer: CarPlayEntryPointReducer()
+            )
+
             await store.send(.onAppear) {
                 $0.templateState = .loading("Loading")
             }
@@ -195,15 +195,15 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
     }
 
     func testActiveTicketGetLocationError() async {
-        let store = TestStore(
-            initialState: CarPlayEntryPointReducer.State(),
-            reducer: { CarPlayEntryPointReducer() }
-        )
-
         await withDependencies {
             $0.entryPointReducerClient = MockEntryPointClient.make(hasActiveTicket: true, getLocationThrows: true)
             $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(loadingSplashText: "Loading")
         } operation: {
+            let store = TestStore(
+                initialState: CarPlayEntryPointReducer.State(),
+                reducer: CarPlayEntryPointReducer()
+            )
+
             await store.send(.onAppear) {
                 $0.templateState = .loading("Loading")
             }
@@ -217,15 +217,15 @@ final class CarPlayEntryPointReducerTests: XCTestCase {
     }
 
     func testInactiveTicketFlow() async {
-        let store = TestStore(
-            initialState: CarPlayEntryPointReducer.State(),
-            reducer: { CarPlayEntryPointReducer() }
-        )
-
         await withDependencies {
             $0.entryPointReducerClient = MockEntryPointClient.make(hasActiveTicket: false)
             $0.carPlayResourceProvider = CarPlayParkingsResourcesMock(loadingSplashText: "Loading")
         } operation: {
+            let store = TestStore(
+                initialState: CarPlayEntryPointReducer.State(),
+                reducer: CarPlayEntryPointReducer()
+            )
+
             await store.send(.onAppear) {
                 $0.templateState = .loading("Loading")
             }
