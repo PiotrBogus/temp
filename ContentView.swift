@@ -1,42 +1,119 @@
+import XCTest
+import ComposableArchitecture
 @testable import CarPlayParkings
 
-extension CarPlayBuyTicketReducerClient {
-    /// Zawsze zwraca poprawne dane i preautoryzację
-    static let success = CarPlayBuyTicketReducerClient(
-        loadData: { _ in .fixture() },
-        loadAccounts: { [.fixture()] },
-        loadSelectedCity: { .fixture() },
-        loadCars: { [.fixture()] },
-        createAuthSession: { },
-        preauthorizeParking: { _ in .fixture }
-    )
+final class CarPlayBuyTicketReducerTests: XCTestCase {
 
-    /// Zawsze rzuca błąd `CarPlayError.missingData`
-    static let failure = CarPlayBuyTicketReducerClient(
-        loadData: { _ in throw CarPlayError.missingData },
-        loadAccounts: { throw CarPlayError.missingData },
-        loadSelectedCity: { throw CarPlayError.missingData },
-        loadCars: { throw CarPlayError.missingData },
-        createAuthSession: { throw CarPlayError.missingData },
-        preauthorizeParking: { _ in throw CarPlayError.missingData }
-    )
-
-    /// Wersja do sterowania ręcznie (np. w konkretnym teście)
-    static func custom(
-        loadData: @escaping (_ subareaHint: String?) throws -> CarPlayParkingsNewParkingFormModel = { _ in .fixture() },
-        loadAccounts: @escaping () throws -> [CarPlayParkingsAccount] = { [.fixture()] },
-        loadSelectedCity: @escaping () throws -> CarPlayParkingsCity = { .fixture() },
-        loadCars: @escaping () throws -> [CarPlayParkingsCarListItem] = { [.fixture()] },
-        createAuthSession: @escaping () async throws -> Void = { },
-        preauthorizeParking: @escaping (CarPlayParkingsNewParkingFormModel) async throws -> CarPlayParkingsPreauthResponse = { _ in .fixture }
-    ) -> CarPlayBuyTicketReducerClient {
-        CarPlayBuyTicketReducerClient(
-            loadData: loadData,
-            loadAccounts: loadAccounts,
-            loadSelectedCity: loadSelectedCity,
-            loadCars: loadCars,
-            createAuthSession: createAuthSession,
-            preauthorizeParking: preauthorizeParking
+    func test_onAppear_loadsData_success() async {
+        let store = TestStore(
+            initialState: CarPlayBuyTicketReducer.State(),
+            reducer: { CarPlayBuyTicketReducer() },
+            withDependencies: {
+                $0.buyTicketReducerClient = .success
+            }
         )
+
+        await store.send(.onAppear)
+
+        await store.receive(\.didLoadData) { state, action in
+            state.data = action.0
+            state.templateState = .didAppear
+        }
+    }
+
+    func test_onAppear_loadsData_failure_fallsBackToRefresh() async {
+        let store = TestStore(
+            initialState: CarPlayBuyTicketReducer.State(),
+            reducer: { CarPlayBuyTicketReducer() },
+            withDependencies: {
+                $0.buyTicketReducerClient = .failure
+            }
+        )
+
+        await store.send(.onAppear)
+
+        await store.receive(\.refresh) { state, _ in
+            state.templateState = .loading(
+                store.dependencies.buyTicketReducerClient.resourceProvider.loadingSplashText
+            )
+        }
+    }
+
+    func test_onNextButtonTap_validationFailure() async {
+        let model = CarPlayParkingsNewParkingFormModel.fixture()
+        // "zerujemy" wymagane pola żeby wymusić błędy
+        model.selectedCar = nil
+        model.selectedAccount = nil
+        model.selectedTimeOption = nil
+        model.selectedSubarea = nil
+
+        let store = TestStore(
+            initialState: CarPlayBuyTicketReducer.State(data: model),
+            reducer: { CarPlayBuyTicketReducer() },
+            withDependencies: {
+                $0.buyTicketReducerClient = .success
+            }
+        )
+
+        await store.send(.onNextButtonTap)
+        await store.receive(\.onValidationFormError) { state, action in
+            state.templateState = .validationError(_, action.0)
+        }
+    }
+
+    func test_onNextButtonTap_validationSuccess_andPreauthSuccess() async {
+        let model = CarPlayParkingsNewParkingFormModel.fixture()
+        // w fixture mamy wypełnione wszystkie wymagane pola
+
+        let store = TestStore(
+            initialState: CarPlayBuyTicketReducer.State(data: model),
+            reducer: { CarPlayBuyTicketReducer() },
+            withDependencies: {
+                $0.buyTicketReducerClient = .success
+            }
+        )
+
+        await store.send(.onNextButtonTap)
+
+        await store.receive(\.onValidationFormSuccess) { state, _ in
+            state.templateState = .preauthNewParkingProcessingSplash
+        }
+
+        await store.receive(\.didPreauthorizeParking) { state, action in
+            state.destination = .confirmParking(
+                CarPlayConfirmParkingReducer.State(preauthResponse: action.0, model: model)
+            )
+        }
+    }
+
+    func test_onNextButtonTap_validationSuccess_andPreauthFailure() async {
+        let model = CarPlayParkingsNewParkingFormModel.fixture()
+
+        let failingClient = CarPlayBuyTicketReducerClient.custom(
+            preauthorizeParking: { _ in throw CarPlayError.missingData }
+        )
+
+        let store = TestStore(
+            initialState: CarPlayBuyTicketReducer.State(data: model),
+            reducer: { CarPlayBuyTicketReducer() },
+            withDependencies: {
+                $0.buyTicketReducerClient = failingClient
+            }
+        )
+
+        await store.send(.onNextButtonTap)
+
+        await store.receive(\.onValidationFormSuccess) { state, _ in
+            state.templateState = .preauthNewParkingProcessingSplash
+        }
+
+        await store.receive(\.error) { state, action in
+            state.templateState = .error(.init(
+                type: .preauthorizeError,
+                title: store.dependencies.carPlayParkingsErrorParser.getMessage(action.0),
+                description: nil,
+                buttonTitle: store.dependencies.buyTicketReducerClient.resourceProvider.alertButtonTryAgainText
+            ))
+        }
     }
 }
