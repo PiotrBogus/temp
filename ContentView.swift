@@ -1,13 +1,28 @@
+@testable import CarPlayParkings
 
-extension CarPlayParkingsPreauthResponse {
-    static let fixture = CarPlayParkingsPreauthResponse(
-        plate: "ABC123",
-        locationName: "Test Location",
-        price: "10.00",
-        validFrom: "2025-09-03T08:00:00Z",
-        validFromTimestamp: 1_694_020_800, // przykładowy timestamp
-        validTo: "2025-09-03T10:00:00Z",
-        validToTimestamp: 1_694_028_000,
-        transactionId: "txn_123"
-    )
+// MARK: - CarPlayParkingsNewParkingFormModel Fixture
+extension CarPlayParkingsNewParkingFormModel {
+    static func fixture(
+        cars: [CarPlayParkingsCarListItem] = [],
+        accounts: [CarPlayParkingsAccount] = []
+    ) -> CarPlayParkingsNewParkingFormModel {
+        CarPlayParkingsNewParkingFormModel(
+            city: CarPlayParkingsCity(
+                name: "Test City",
+                tarrifs: []
+            ),
+            subareaHint: nil,
+            cars: cars,
+            accounts: accounts,
+            resourceProvider: CarPlayParkingsResourcesMock(
+                selectText: "Select",
+                newParkingCarTitleText: "Car",
+                newParkingAccountTitleText: "Account",
+                newParkingTimeTypeTitleText: "Time",
+                noActiveParkingSelectZoneEmptyText: "No Zones",
+                parkingZoneText: "Zone"
+            ),
+            timeOptionsResourceProvider: CarPlayParkingsTimeOptionsResourceProviderMock()
+        )
+    }
 }
