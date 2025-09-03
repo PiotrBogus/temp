@@ -1,114 +1,51 @@
-import CarPlay
-import Combine
-import ComposableArchitecture
-import UIComponents
+final class CarPlayCoordinator: NSObject {
+    private(set) var interfaceController: CPInterfaceController?
+    private(set) var didPop = PassthroughSubject<CPTemplate, Never>()
 
-final class CarPlayActiveTicketTemplate: CarPlayTemplate {
-    @Bindable private var store: StoreOf<CarPlayActiveTicketReducer>
-    private var cancellables = Set<AnyCancellable>()
-    @Dependency(\.carPlayCoordinator) private var coordinator
-    @Dependency(\.carPlayResourceProvider) private var resourceProvider
-    private var mainTemplate: CPPointOfInterestTemplate?
-    private let poiDelegate: CarPlayPOIDelegate
+    /// Rejestr: CarPlayTemplate.id → (CarPlayTemplate, CPTemplate)
+    private var registry: [UUID: (any CarPlayTemplate, CPTemplate)] = [:]
 
-    init(
-        store: StoreOf<CarPlayActiveTicketReducer>,
-        poiDelegate: CarPlayPOIDelegate = .init()
-    ) {
-        self.store = store
-        self.poiDelegate = poiDelegate
-        bindObservers()
+    func save(_ interfaceController: CPInterfaceController) {
+        self.interfaceController = interfaceController
+        self.interfaceController?.delegate = self
     }
 
-    private func bindObservers() {
-        ViewStore(store, observe: { $0.templateState })
-            .publisher
-            .sink(receiveValue: { [weak self] state in
-                guard let self else { return }
-                switch state {
-                case .didAppear:
-                    self.activeTicketTemplate()
-                case .stopTicket:
-                    self.stopTicketSplashTemplate()
-                case let .error(model):
-                    self.errorTemplate(errorModel: model)
-                case .entryPoint:
-                    self.entryPointTemplate()
-                }
-            })
-            .store(in: &cancellables)
-
-        // Timer updates: aktualizacja remainingTime w template
-        ViewStore(store, observe: \.ticket.remainingTime)
-            .publisher
-            .sink { [weak self] remainingTime in
-                guard let self,
-                      let template = self.mainTemplate,
-                      let location = self.store.location else { return }
-
-                let poi = CPPointOfInterest(
-                    location: location,
-                    title: remainingTime,
-                    subtitle: self.store.ticket.remainingTimeLabel,
-                    summary: nil,
-                    detailTitle: self.store.ticket.title,
-                    detailSubtitle: self.store.ticket.remainingTimeLabel,
-                    detailSummary: remainingTime,
-                    pinImage: nil
-                )
-                template.setPointsOfInterest([poi], selectedIndex: NSNotFound)
-            }
-            .store(in: &cancellables)
+    func register(_ template: any CarPlayTemplate, cpTemplate: CPTemplate) {
+        registry[template.id] = (template, cpTemplate)
     }
 
-    private func activeTicketTemplate() {
-        guard let location = store.location else { return }
+    func remove(_ template: any CarPlayTemplate) {
+        registry.removeValue(forKey: template.id)
+    }
 
-        let poi = CPPointOfInterest(
-            location: location,
-            title: store.ticket.remainingTime,
-            subtitle: store.ticket.remainingTimeLabel,
-            summary: nil,
-            detailTitle: store.ticket.title,
-            detailSubtitle: store.ticket.remainingTimeLabel,
-            detailSummary: store.ticket.remainingTime,
-            pinImage: nil
-        )
+    func removeAll() {
+        registry.removeAll()
+    }
 
-        let stopButton = CPBarButton(title: resourceProvider.activeTicketOverviewStopButtonText) { [weak self] _ in
-            self?.store.send(.onStopTicket)
+    func cpTemplate(for template: any CarPlayTemplate) -> CPTemplate? {
+        registry[template.id]?.1
+    }
+
+    func carPlayTemplate(for cpTemplate: CPTemplate) -> (any CarPlayTemplate)? {
+        registry.values.first(where: { $0.1 === cpTemplate })?.0
+    }
+
+    func contains(cpTemplate: CPTemplate) -> Bool {
+        interfaceController?.templates.contains(where: { $0 === cpTemplate }) ?? false
+    }
+
+    var allTemplates: [any CarPlayTemplate] {
+        registry.values.map(\.0)
+    }
+}
+
+extension CarPlayCoordinator: CPInterfaceControllerDelegate {
+    func templateDidDisappear(_ aTemplate: CPTemplate, animated: Bool) {
+        didPop.send(aTemplate)
+
+        if let carPlayTemplate = carPlayTemplate(for: aTemplate) {
+            carPlayTemplate.didDisappear(cpTemplate: aTemplate) // 🔔 callback
+            remove(carPlayTemplate)
         }
-
-        let template = CPPointOfInterestTemplate(
-            title: store.ticket.title,
-            pointsOfInterest: [poi],
-            selectedIndex: NSNotFound
-        )
-        template.trailingNavigationBarButtons = [stopButton]
-        template.pointOfInterestDelegate = poiDelegate
-
-        self.mainTemplate = template
-        coordinator.interfaceController?.dismissAndSetAsRoot(template: template)
-    }
-
-    private func stopTicketSplashTemplate() {
-        let template = CarPlayLoadingTemplateFactory.make(message: resourceProvider.processingStopActiveParkingText)
-        coordinator.interfaceController?.dismissAndPresent(template: template)
-    }
-
-    private func errorTemplate(errorModel: CarPlayErrorTemplateModel<CarPlayActiveTicketErrorType>) {
-        let template = CarPlayErrorTemplateFactory.make(errorModel: errorModel) { [weak self] in
-            self?.store.send(.onTryAgain)
-        }
-        coordinator.interfaceController?.dismissAndPresent(template: template)
-    }
-
-    private func entryPointTemplate() {
-        coordinator.removeAllChilds()
-        let store = Store(
-            initialState: CarPlayEntryPointReducer.State(),
-            reducer: { CarPlayEntryPointReducer() }
-        )
-        coordinator.append(CarPlayEntryPointTemplate(store: store))
     }
 }
