@@ -1,123 +1,114 @@
 import CarPlay
+import Combine
 import ComposableArchitecture
-import Dependencies
-import ParkingPlaces
+import UIComponents
 
-@Reducer
-struct CarPlayActiveTicketReducer: Sendable {
-    @ObservableState
-    struct State: Equatable, Sendable {
-        var templateState: TemplateState = .didAppear
-        let activeTicket: CarPlayParkingsTicketListItem
-        let ticket: CarPlayParkingsActiveTicketOverviewModel
-        let location: MKMapItem
-        var isTimerRunning: Bool = false
+final class CarPlayActiveTicketTemplate: CarPlayTemplate {
+    @Bindable private var store: StoreOf<CarPlayActiveTicketReducer>
+    private var cancellables = Set<AnyCancellable>()
+    @Dependency(\.carPlayCoordinator) private var coordinator
+    @Dependency(\.carPlayResourceProvider) private var resourceProvider
+    private var mainTemplate: CPPointOfInterestTemplate?
+    private let poiDelegate: CarPlayPOIDelegate
+
+    init(
+        store: StoreOf<CarPlayActiveTicketReducer>,
+        poiDelegate: CarPlayPOIDelegate = .init()
+    ) {
+        self.store = store
+        self.poiDelegate = poiDelegate
+        bindObservers()
     }
 
-    enum TemplateState: Equatable {
-        case didAppear
-        case stopTicket
-        case error(CarPlayErrorTemplateModel<CarPlayActiveTicketErrorType>)
-        case entryPoint
-    }
-
-    enum Action: Sendable, Equatable {
-        case onAppear
-        case onDisappear
-        case onStopTicket
-        case onTicketExpired
-        case onStopTicketSuccess
-        case onStopTicketFail(String) // zamiast `Error`, żeby było Equatable
-        case onTryAgain
-        case _tick // wewnętrzna akcja od timera
-    }
-
-    @Dependency(\.carPlayParkingsErrorParser) private var errorParser
-    @Dependency(\.activeTicketReducerClient) private var reducerClient
-    @Dependency(\.continuousClock) private var clock
-
-    var body: some ReducerOf<Self> {
-        Reduce { state, action in
-            switch action {
-            case .onAppear:
-                guard !state.isTimerRunning else { return .none }
-                state.isTimerRunning = true
-                return startTimer(until: state.activeTicket.validToTimestamp)
-
-            case .onDisappear:
-                state.isTimerRunning = false
-                return .cancel(id: CancelID.timer)
-
-            case ._tick:
-                if Date().millisecondsSinceEpoch >= state.activeTicket.validToTimestamp {
-                    return .send(.onTicketExpired)
+    private func bindObservers() {
+        ViewStore(store, observe: { $0.templateState })
+            .publisher
+            .sink(receiveValue: { [weak self] state in
+                guard let self else { return }
+                switch state {
+                case .didAppear:
+                    self.activeTicketTemplate()
+                case .stopTicket:
+                    self.stopTicketSplashTemplate()
+                case let .error(model):
+                    self.errorTemplate(errorModel: model)
+                case .entryPoint:
+                    self.entryPointTemplate()
                 }
-                return .none
+            })
+            .store(in: &cancellables)
 
-            case .onStopTicket, .onTryAgain:
-                state.templateState = .stopTicket
-                return stopTicket(ticket: state.activeTicket)
+        // Timer updates: aktualizacja remainingTime w template
+        ViewStore(store, observe: \.ticket.remainingTime)
+            .publisher
+            .sink { [weak self] remainingTime in
+                guard let self,
+                      let template = self.mainTemplate,
+                      let location = self.store.location else { return }
 
-            case .onStopTicketSuccess, .onTicketExpired:
-                state.templateState = .entryPoint
-                return notifyParkingWidgetAndEntryPoint(activeTicket: state.activeTicket)
-
-            case let .onStopTicketFail(message):
-                state.templateState = .error(.init(
-                    type: .stopParkingError,
-                    title: message,
-                    description: nil,
-                    buttonTitle: reducerClient.resourceProvider.alertButtonTryAgainText
-                ))
-                return .none
-            }
-        }
-    }
-
-    // MARK: - Timer
-    private func startTimer(until validTo: Int64) -> Effect<Action> {
-        .run { send in
-            for await _ in clock.timer(interval: .seconds(1)) {
-                await send(._tick)
-            }
-        }
-        .cancellable(id: CancelID.timer, cancelInFlight: true)
-    }
-
-    // MARK: - Stop ticket
-    private func stopTicket(ticket: CarPlayParkingsTicketListItem) -> Effect<Action> {
-        .run { send in
-            do {
-                try await reducerClient.stopTicket(ticket)
-                await send(.onStopTicketSuccess)
-            } catch {
-                let message = errorParser.getMessage(error: error)
-                await send(.onStopTicketFail(message))
-            }
-        }
-    }
-
-    // MARK: - Notify
-    private func notifyParkingWidgetAndEntryPoint(activeTicket: CarPlayParkingsTicketListItem) -> Effect<Action> {
-        .run { _ in
-            await MainActor.run {
-                IKOParkingPlacesStopParkingHelper.notifyParkingStopped(activeTicket)
-                NotificationCenter.default.post(
-                    name: Notification.Name(rawValue: kIKOParkingPlacesListRefresh),
-                    object: nil
+                let poi = CPPointOfInterest(
+                    location: location,
+                    title: remainingTime,
+                    subtitle: self.store.ticket.remainingTimeLabel,
+                    summary: nil,
+                    detailTitle: self.store.ticket.title,
+                    detailSubtitle: self.store.ticket.remainingTimeLabel,
+                    detailSummary: remainingTime,
+                    pinImage: nil
                 )
+                template.setPointsOfInterest([poi], selectedIndex: NSNotFound)
             }
+            .store(in: &cancellables)
+    }
+
+    private func activeTicketTemplate() {
+        guard let location = store.location else { return }
+
+        let poi = CPPointOfInterest(
+            location: location,
+            title: store.ticket.remainingTime,
+            subtitle: store.ticket.remainingTimeLabel,
+            summary: nil,
+            detailTitle: store.ticket.title,
+            detailSubtitle: store.ticket.remainingTimeLabel,
+            detailSummary: store.ticket.remainingTime,
+            pinImage: nil
+        )
+
+        let stopButton = CPBarButton(title: resourceProvider.activeTicketOverviewStopButtonText) { [weak self] _ in
+            self?.store.send(.onStopTicket)
         }
+
+        let template = CPPointOfInterestTemplate(
+            title: store.ticket.title,
+            pointsOfInterest: [poi],
+            selectedIndex: NSNotFound
+        )
+        template.trailingNavigationBarButtons = [stopButton]
+        template.pointOfInterestDelegate = poiDelegate
+
+        self.mainTemplate = template
+        coordinator.interfaceController?.dismissAndSetAsRoot(template: template)
     }
 
-    // MARK: - CancelID
-    private enum CancelID {
-        case timer
+    private func stopTicketSplashTemplate() {
+        let template = CarPlayLoadingTemplateFactory.make(message: resourceProvider.processingStopActiveParkingText)
+        coordinator.interfaceController?.dismissAndPresent(template: template)
     }
-}
 
-private extension Date {
-    var millisecondsSinceEpoch: Int64 {
-        Int64(self.timeIntervalSince1970 * 1000)
+    private func errorTemplate(errorModel: CarPlayErrorTemplateModel<CarPlayActiveTicketErrorType>) {
+        let template = CarPlayErrorTemplateFactory.make(errorModel: errorModel) { [weak self] in
+            self?.store.send(.onTryAgain)
+        }
+        coordinator.interfaceController?.dismissAndPresent(template: template)
+    }
+
+    private func entryPointTemplate() {
+        coordinator.removeAllChilds()
+        let store = Store(
+            initialState: CarPlayEntryPointReducer.State(),
+            reducer: { CarPlayEntryPointReducer() }
+        )
+        coordinator.append(CarPlayEntryPointTemplate(store: store))
     }
 }
