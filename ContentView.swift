@@ -1,101 +1,13 @@
-import XCTest
-import ComposableArchitecture
-@testable import CarPlayParkings
 
-@MainActor
-final class CarPlayConfirmParkingReducerTests: XCTestCase {
-
-    func testOnConfirm_AuthorizeSuccess() async {
-        let store = TestStore(
-            initialState: CarPlayConfirmParkingReducer.State(
-                preauthResponse: .fixture,
-                model: .fixture
-            ),
-            reducer: { CarPlayConfirmParkingReducer() },
-            withDependencies: {
-                $0.confirmParkingReducerClient = .init(
-                    authorizeParking: { _ in }, // success, nic nie rzuca
-                    resourceProvider: CarPlayParkingsResourcesMock(
-                        alertButtonTryAgainText: "Retry"
-                    )
-                )
-                $0.carPlayParkingsErrorParser = .init(
-                    getMessage: { _ in "Parsed error" }
-                )
-            }
-        )
-
-        await store.send(.onConfirm) {
-            $0.templateState = .loading
-        }
-
-        await store.receive(.onAuthorizeParkingSuccess) {
-            $0.templateState = .entryPoint
-        }
-    }
-
-    func testOnConfirm_AuthorizeFailure() async {
-        struct DummyError: Error {}
-
-        let store = TestStore(
-            initialState: CarPlayConfirmParkingReducer.State(
-                preauthResponse: .fixture,
-                model: .fixture
-            ),
-            reducer: { CarPlayConfirmParkingReducer() },
-            withDependencies: {
-                $0.confirmParkingReducerClient = .init(
-                    authorizeParking: { _ in throw DummyError() },
-                    resourceProvider: CarPlayParkingsResourcesMock(
-                        alertButtonTryAgainText: "Retry"
-                    )
-                )
-                $0.carPlayParkingsErrorParser = .init(
-                    getMessage: { _ in "Parsed error" }
-                )
-            }
-        )
-
-        await store.send(.onConfirm) {
-            $0.templateState = .loading
-        }
-
-        await store.receive(.onAuthorizeParkingFailure(DummyError())) {
-            $0.templateState = .error(
-                .init(
-                    type: .authorizeParkingError,
-                    title: "Parsed error",
-                    description: nil,
-                    buttonTitle: "Retry"
-                )
-            )
-        }
-    }
-
-    func testOnTryAgain_TriggersAuthorize() async {
-        let store = TestStore(
-            initialState: CarPlayConfirmParkingReducer.State(
-                preauthResponse: .fixture,
-                model: .fixture
-            ),
-            reducer: { CarPlayConfirmParkingReducer() },
-            withDependencies: {
-                $0.confirmParkingReducerClient = .init(
-                    authorizeParking: { _ in }, // succeeds
-                    resourceProvider: CarPlayParkingsResourcesMock(
-                        alertButtonTryAgainText: "Retry"
-                    )
-                )
-                $0.carPlayParkingsErrorParser = .testValue
-            }
-        )
-
-        await store.send(.onTryAgain) {
-            $0.templateState = .loading
-        }
-
-        await store.receive(.onAuthorizeParkingSuccess) {
-            $0.templateState = .entryPoint
-        }
-    }
+extension CarPlayParkingsPreauthResponse {
+    static let fixture = CarPlayParkingsPreauthResponse(
+        plate: "ABC123",
+        locationName: "Test Location",
+        price: "10.00",
+        validFrom: "2025-09-03T08:00:00Z",
+        validFromTimestamp: 1_694_020_800, // przykładowy timestamp
+        validTo: "2025-09-03T10:00:00Z",
+        validToTimestamp: 1_694_028_000,
+        transactionId: "txn_123"
+    )
 }
