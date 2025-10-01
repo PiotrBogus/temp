@@ -1,24 +1,30 @@
-private func markPreselected(
-    in items: inout IdentifiedArrayOf<MenuItemFeature.State>,
-    preselectedId: String
-) -> Bool {
-    var found = false
-
-    for index in items.indices {
-        if items[index].id == preselectedId {
-            items[index].isSelected = true
-            found = true
-        } else {
-            var children = items[index].identifiedArrayOfChildrens
-            let childFound = markPreselected(in: &children, preselectedId: preselectedId)
-            items[index].identifiedArrayOfChildrens = children
-
-            if childFound {
-                items[index].isExpanded = true   // 🔑 tu parent rozwija się, jeśli dziecko znalazło target
+    @discardableResult
+    private func keepAncestorsAndCollapseOthers(
+        expandedId: String,
+        in items: inout IdentifiedArrayOf<MenuItemFeature.State>
+    ) -> Bool {
+        var found = false
+        for index in items.indices {
+            if items[index].id == expandedId {
                 found = true
+                keepAncestorsAndCollapseOthers(
+                    expandedId: expandedId,
+                    in: &items[index].identifiedArrayOfChildrens
+                )
+            } else {
+                let childHasExpanded = keepAncestorsAndCollapseOthers(
+                    expandedId: expandedId,
+                    in: &items[index].identifiedArrayOfChildrens
+                )
+
+                if childHasExpanded {
+                    items[index].isExpanded = true
+                    found = true
+                } else {
+                    items[index].isExpanded = false
+                }
             }
         }
-    }
 
-    return found
-}
+        return found
+    }
