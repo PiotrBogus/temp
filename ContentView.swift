@@ -9,13 +9,12 @@ private func markPreselected(
             items[index].isSelected = true
             found = true
         } else {
-            let childFound = markPreselected(
-                in: &items[index].identifiedArrayOfChildrens,
-                preselectedId: preselectedId
-            )
+            var children = items[index].identifiedArrayOfChildrens
+            let childFound = markPreselected(in: &children, preselectedId: preselectedId)
+            items[index].identifiedArrayOfChildrens = children
+
             if childFound {
-                // jeśli dziecko zawiera preselected → parent się rozwija
-                items[index].isExpanded = true
+                items[index].isExpanded = true   // 🔑 tu parent rozwija się, jeśli dziecko znalazło target
                 found = true
             }
         }
