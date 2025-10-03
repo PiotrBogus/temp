@@ -16,10 +16,10 @@ public struct MainFeature: Sendable {
 
     @ObservableState
     public struct State: Equatable, Sendable {
-
         @Presents var destination: Destination.State?
-        var selectedMenuItemId: String?
+        @Presents var menu: MenuFeature.State?
 
+        var selectedMenuItemId: String?
         @Shared(.inMemory(SharedPresentationKeys.toolbarMenuTapped)) var isToolbarMenuTapped: Bool = false
 
         var content: Content.State
@@ -36,6 +36,7 @@ public struct MainFeature: Sendable {
         case bottomBar(BottomBarAction)
         case content(Content.Action)
         case destination(PresentationAction<Destination.Action>)
+        case menu(PresentationAction<MenuFeature.Action>)
         case onAppear
         case onFirstAppear
         case mainMenuTapped
@@ -48,6 +49,7 @@ public struct MainFeature: Sendable {
 
         Reduce { state, action in
             switch action {
+            // --- Bottom bar taps
             case .bottomBar(.featuresTapped):
                 state.destination = .features(FeaturesFeature.State())
                 return .none
@@ -64,39 +66,46 @@ public struct MainFeature: Sendable {
                 state.destination = .search(SearchFeature.State())
                 return .none
 
+            // --- Content actions
             case .content:
                 return .none
-            
-            case .destination(.presented(.menu(.delegate(.dismissMenu)))):
-                state.destination = nil
-                return .none
-                
-            case let .destination(.presented(.menu(.delegate(.didSelectMenuItem(id))))):
-                state.selectedMenuItemId = id
-                state.destination = nil
-                return .none
 
+            // --- Destination (sheets)
             case .destination:
                 return .none
 
+            // --- Menu overlay
+            case .menu(.presented(.delegate(.dismissMenu))):
+                state.menu = nil
+                return .none
+
+            case let .menu(.presented(.delegate(.didSelectMenuItem(id)))):
+                state.selectedMenuItemId = id
+                state.menu = nil
+                return .none
+
+            case .menu:
+                return .none
+
+            // --- Lifecycle
             case .onFirstAppear:
                 guard !state.didStartToolbarMenuTappedObservation else { return .none }
                 state.didStartToolbarMenuTappedObservation = true
                 return observeToolbarMenuTapped(state)
-                
+
             case .onAppear:
                 logScreen(.main)
                 return .none
 
+            // --- Open menu
             case .mainMenuTapped:
-                // TODO: Open main menu
-                print(">>> Main menu button tapped")
-                state.destination = .menu(MenuFeature.State(preselectedItemId: state.selectedMenuItemId))
+                state.menu = MenuFeature.State(preselectedItemId: state.selectedMenuItemId)
                 state.$isToolbarMenuTapped.withLock { $0 = false }
                 return .none
             }
         }
         .ifLet(\.$destination, action: \.destination)
+        .ifLet(\.$menu, action: \.menu)
     }
 }
 
@@ -133,89 +142,8 @@ extension MainFeature {
         case notifications(NotificationsFeature)
         case profile(ProfileFeature)
         case search(SearchFeature)
-        case menu(MenuFeature)
+        // 👈 menu usunięte stąd!
     }
 }
 
 private enum CancelID { case menu }
-
-
-
-
-
-
-
-//
-//  MainView.swift
-//  Genie
-//
-//  Created by Daniel Satin on 22.02.2025.
-//
-
-import ComposableArchitecture
-import KpiDailySalesPresentation
-import KpiIntlMarketTrackerPresentation
-import SwiftUI
-
-public struct MainView: View {
-    @Bindable var store: StoreOf<MainFeature>
-
-    public init(store: StoreOf<MainFeature>) {
-        self.store = store
-    }
-
-    public var body: some View {
-        ZStack {
-            content
-                .toolbar { MainBottomToolbarContent { store.send(.bottomBar($0)) } }
-                .onFirstAppear { store.send(.onFirstAppear) }
-                .onAppear {
-                    store.send(.onAppear)
-                }
-                .sheet(
-                    store: store.scope(state: \.$destination, action: \.destination)
-                ) { store in
-                    switch store.case {
-                    case let .features(store):
-                        FeaturesView(store: store)
-                    case let .notifications(store):
-                        NotificationsView(store: store)
-                    case let .profile(store):
-                        ProfileView(store: store)
-                    case let .search(store):
-                        SearchView(store: store)
-                    }
-                }
-
-            menuView
-        }
-    }
-
-    @ViewBuilder
-    var content: some View {
-        switch store.scope(state: \.content, action: \.content).case {
-        case let .dailySales(store):
-            DailySalesNavigationView(store: store)
-        case let .intlMarketTracker(store):
-            IntlMarketTrackerNavigationView(store: store)
-        }
-    }
-
-    var menuView: some View {
-        GeometryReader { geometry in
-            MenuView(store: store.scope(state: \.menu, action: \.menu))
-                .frame(width: geometry.size.width * 0.75,
-                       height: geometry.size.height)
-                .background(Color.white)
-                .offset(x: store.isMenuVisible ? geometry.size.width * 0.25 : geometry.size.width)
-                .opacity(store.isMenuVisible ? 1 : 0)
-        }
-        .animation(.easeIn(duration: 0.5), value: store.isMenuVisible)
-    }
-}
-
-#Preview {
-    MainView(store: Store(initialState: MainFeature.State()) {
-        MainFeature()
-    })
-}
