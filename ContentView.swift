@@ -18,7 +18,10 @@ final class CarPlayBuyTicketReducerTests: XCTestCase {
 
         await store.send(.onAppear)
 
-        await store.receive(\.effect.didLoadData) {
+        await store.receive(where: { action in
+            if case .effect(.didLoadData) = action { return true }
+            return false
+        }) {
             $0.data = .fixture()
             $0.templateState = .didAppear
         }
@@ -37,7 +40,10 @@ final class CarPlayBuyTicketReducerTests: XCTestCase {
 
         await store.send(.onAppear)
 
-        await store.receive(\.refresh) {
+        await store.receive(where: { action in
+            if case .refresh = action { return true }
+            return false
+        }) {
             $0.templateState = .loading(
                 store.dependencies.buyTicketReducerClient.resourceProvider.loadingSplashText
             )
@@ -62,7 +68,11 @@ final class CarPlayBuyTicketReducerTests: XCTestCase {
         )
 
         await store.send(.template(.onNextButtonTap))
-        await store.receive(\.effect.onValidationFormError) {
+
+        await store.receive(where: { action in
+            if case .effect(.onValidationFormError) = action { return true }
+            return false
+        }) {
             $0.templateState = .validationError(.init(), [])
         }
     }
@@ -82,11 +92,17 @@ final class CarPlayBuyTicketReducerTests: XCTestCase {
 
         await store.send(.template(.onNextButtonTap))
 
-        await store.receive(\.effect.onValidationFormSuccess) {
+        await store.receive(where: { action in
+            if case .effect(.onValidationFormSuccess) = action { return true }
+            return false
+        }) {
             $0.templateState = .preauthNewParkingProcessingSplash
         }
 
-        await store.receive(\.effect.didPreauthorizeParking) {
+        await store.receive(where: { action in
+            if case .effect(.didPreauthorizeParking) = action { return true }
+            return false
+        }) {
             $0.destination = .confirmParking(
                 CarPlayConfirmParkingReducer.State(preauthResponse: .fixture, model: model)
             )
@@ -112,7 +128,10 @@ final class CarPlayBuyTicketReducerTests: XCTestCase {
 
         await store.send(.template(.onNextButtonTap))
 
-        await store.receive(\.effect.onValidationFormError) {
+        await store.receive(where: { action in
+            if case .effect(.onValidationFormError) = action { return true }
+            return false
+        }) {
             $0.templateState = .validationError(UUID(), [.areaNotSelected, .timeOptionNotSelected])
         }
     }
