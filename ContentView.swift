@@ -1,261 +1,208 @@
-//
-//  MainView.swift
-//
-
+import CarPlay
 import ComposableArchitecture
-import KpiDailySalesPresentation
-import KpiIntlMarketTrackerPresentation
-import SwiftUI
-
-public struct MainView: View {
-    @Bindable var store: StoreOf<MainFeature>
-
-    public init(store: StoreOf<MainFeature>) {
-        self.store = store
-    }
-
-    public var body: some View {
-            ZStack {
-                NavigationStack {
-                    content
-                        .toolbar {
-                            MainBottomToolbarContent { store.send(.bottomBar($0)) }
-                        }
-                        .onFirstAppear { store.send(.onFirstAppear) }
-                        .onAppear { store.send(.onAppear) }
-                        .sheet(
-                            store: store.scope(state: \.$destination, action: \.destination)
-                        ) { destinationStore in
-                            switch destinationStore.case {
-                            case let .features(store):
-                                FeaturesView(store: store)
-                            case let .notifications(store):
-                                NotificationsView(store: store)
-                            case let .profile(store):
-                                ProfileView(store: store)
-                            case let .search(store):
-                                SearchView(store: store)
-                            }
-                        }
-                }
-                
-                menuOverlay
-            }
-    }
-
-    @ViewBuilder
-    var content: some View {
-        switch store.scope(state: \.content, action: \.content).case {
-        case let .dailySales(store):
-            DailySalesNavigationView(store: store)
-        case let .intlMarketTracker(store):
-            IntlMarketTrackerNavigationView(store: store)
-        }
-    }
-
-    @ViewBuilder
-    var menuOverlay: some View {
-        if let menuStore = store.scope(state: \.$menu, action: \.menu) {
-            GeometryReader { geometry in
-                ZStack(alignment: .trailing) {
-                    Color.black
-                        .opacity(store.isMenuVisible ? 0.5 : 0.0)
-                        .ignoresSafeArea()
-                        .onTapGesture {
-                            _ = withAnimation(.easeInOut(duration: 0.3)) {
-                                store.send(.menu(.presented(.delegate(.dismissMenu))))
-                            }
-                        }
-
-                    MenuView(store: menuStore)
-                        .frame(
-                            width: store.deviceOrientation.isLandscape ? geometry.size.width : geometry.size.width * 0.75,
-                            height: geometry.size.height
-                        )
-                        .background(Color.white)
-                        .shadow(radius: 8)
-                        .offset(x: store.isMenuVisible ? 0 : geometry.size.width)
-                        .animation(.easeInOut(duration: 0.3), value: store.isMenuVisible)
-                }
-                .onAppear {
-                    _ = withAnimation(.easeInOut(duration: 0.3)) {
-                        store.send(.updateMenuVisibility(true))
-                    }
-                }
-                .onDisappear {
-                    store.send(.updateMenuVisibility(false))
-                }
-            }
-        }
-    }
-}
-
-#Preview {
-    MainView(store: Store(initialState: MainFeature.State()) {
-        MainFeature()
-    })
-}
-
-
-
-
-//
-//  MainFeature.swift
-//  Genie
-//
-//  Created by Daniel Satin on 17.06.2025.
-//
-
-import ComposableArchitecture
-import KpiDailySalesPresentation
-import KpiIntlMarketTrackerPresentation
-import GenieCommonPresentation
+import Dependencies
+import IKOCommon
 
 @Reducer
-public struct MainFeature: Sendable {
-    public init() {}
-
+struct CarPlayInitialReducer: Sendable {
     @ObservableState
-    public struct State: Equatable, Sendable {
+    struct State: Equatable, Sendable {
         @Presents var destination: Destination.State?
-        @Presents var menu: MenuFeature.State?
 
-        var selectedMenuItemId: String?
-        @Shared(.inMemory(SharedPresentationKeys.toolbarMenuTapped)) var isToolbarMenuTapped: Bool = false
-        @Shared(.deviceOrientation) var deviceOrientation: DeviceOrientation = .unknown
+        var templateState: TemplateState = .willAppear
+    }
 
-        var content: Content.State
-        var didStartToolbarMenuTappedObservation = false
-        var isMenuVisible: Bool = false
+    enum TemplateState: Equatable {
+        case willAppear
+        case loading(String)
+        case error(CarPlayErrorTemplateModel<CarPlayInitialErrorType>)
 
-        public init(
-            content: Content.State = .intlMarketTracker(.init())
-        ) {
-            self.content = content
+        static func == (lhs: TemplateState, rhs: TemplateState) -> Bool {
+            switch (lhs, rhs) {
+            case (.willAppear, .willAppear),
+                (.loading, .loading),
+                (.error, .error):
+                return true
+            default:
+                return false
+            }
         }
     }
 
-    public enum Action: Sendable {
-        case bottomBar(BottomBarAction)
-        case content(Content.Action)
+    enum Action: Sendable {
         case destination(PresentationAction<Destination.Action>)
-        case menu(PresentationAction<MenuFeature.Action>)
         case onAppear
-        case onFirstAppear
-        case mainMenuTapped
-        case updateMenuVisibility(Bool)
+        case refresh
+        case onErrorButtonTap(CarPlayInitialErrorType)
+        case onCheckRequirementsError(String)
+        case onCheckRequirementsSuccess
+        case onLoadParkingDataSuccess
+        case onLoadParkingDataError(errorMessage: String)
+        case onCheckMobiletIdAndCarListSuccess
+        case onCheckMobiletIdAndCarListError
+        case onCheckLocationPermissionSuccess
+        case onCheckLocationPermissionError
+        case onActiveTicket(CarPlayParkingsTicketListItem, MKMapItem)
+        case onInactiveTicket
     }
 
-    public var body: some Reducer<State, Action> {
-        Scope(state: \.content, action: \.content) {
-            Content.body
-        }
+    @Reducer(state: .equatable)
+    enum Destination {
+        case inactiveTicket(CarPlayInactiveTicketReducer)
+        case activeTicket(CarPlayActiveTicketReducer)
+    }
 
+    @Dependency(\.initialReducerClient) private var reducerClient
+    @Dependency(\.carPlayParkingsErrorParser) private var errorParser
+
+    var body: some ReducerOf<Self> {
         Reduce { state, action in
             switch action {
-            case .bottomBar(.featuresTapped):
-                state.destination = .features(FeaturesFeature.State())
-                return .none
-
-            case .bottomBar(.notificationsTapped):
-                state.destination = .notifications(NotificationsFeature.State())
-                return .none
-
-            case .bottomBar(.profileTapped):
-                state.destination = .profile(ProfileFeature.State())
-                return .none
-
-            case .bottomBar(.searchTapped):
-                state.destination = .search(SearchFeature.State())
-                return .none
-
-            case .content:
-                return .none
-
             case .destination:
                 return .none
-
-            case .menu(.presented(.delegate(.dismissMenu))):
-                state.isMenuVisible = false
-                state.menu = nil
-                return .none
-
-            case let .menu(.presented(.delegate(.didSelectMenuItem(id)))):
-                state.selectedMenuItemId = id
-                state.isMenuVisible = false
-                state.menu = nil
-                return .none
-
-            case .menu:
-                return .none
-
-            case .onFirstAppear:
-                guard !state.didStartToolbarMenuTappedObservation else { return .none }
-                state.didStartToolbarMenuTappedObservation = true
-                return observeToolbarMenuTapped(state)
-
-            case .onAppear:
-                logScreen(.main)
-                return .none
-
-            case .mainMenuTapped:
-                state.menu = MenuFeature.State(preselectedItemId: state.selectedMenuItemId)
-                state.$isToolbarMenuTapped.withLock { $0 = false }
-                return .none
-            case let .updateMenuVisibility(isVisible):
-                state.isMenuVisible = isVisible
-                if !isVisible {
-                    state.menu = nil
+            case .onAppear, .refresh:
+                if state.templateState != .loading("") {
+                    state.templateState = .loading(reducerClient.resourceProvider.loadingSplashText)
                 }
+                return performCheckRequirements()
+            case let .onCheckRequirementsError(errorMessage):
+                state.templateState =
+                    .error(.init(
+                        type: .checkRequirementsError,
+                        title: errorMessage,
+                        description: nil,
+                        buttonTitle: reducerClient.resourceProvider.alertButtonTryAgainText
+                    ))
+                return .none
+            case .onCheckRequirementsSuccess:
+                if state.templateState != .loading("") {
+                    state.templateState = .loading(reducerClient.resourceProvider.loadingSplashText)
+                }
+                return perfomLoadParkingData()
+            case .onLoadParkingDataSuccess:
+                return performCheckMobiletIdAndCarList()
+            case let .onLoadParkingDataError(errorMessage):
+                state.templateState =
+                    .error(.init(
+                        type: .loadParkingDataError,
+                        title: errorMessage,
+                        description: nil,
+                        buttonTitle: reducerClient.resourceProvider.alertButtonTryAgainText
+                    ))
+                return .none
+            case .onCheckMobiletIdAndCarListSuccess:
+                return performCheckLocation()
+            case .onCheckMobiletIdAndCarListError:
+                state.templateState =
+                    .error(.init(
+                        type: .checkMobiletIdAndCarListError,
+                        title: reducerClient.resourceProvider.mobiletNotFoundText,
+                        description: nil,
+                        buttonTitle: reducerClient.resourceProvider.alertButtonTryAgainText
+                    ))
+                return .none
+            case .onCheckLocationPermissionSuccess:
+                return performGetActiveTicket()
+            case .onCheckLocationPermissionError:
+                state.templateState =
+                    .error(.init(
+                        type: .locationPermissionError,
+                        title: reducerClient.resourceProvider.locationDisabledText,
+                        description: nil,
+                        buttonTitle: reducerClient.resourceProvider.alertButtonTryAgainText
+                    ))
+                return .none
+            case let .onErrorButtonTap(errorType):
+                if state.templateState != .loading("") {
+                    state.templateState = .loading(reducerClient.resourceProvider.loadingSplashText)
+                }
+                switch errorType {
+                case .locationPermissionError:
+                    return performCheckLocation()
+                case .checkMobiletIdAndCarListError:
+                    return perfomLoadParkingData()
+                case .loadParkingDataError:
+                    return perfomLoadParkingData()
+                case .checkRequirementsError:
+                    return performCheckRequirements()
+                }
+            case let .onActiveTicket(ticket, location):
+                state.destination = .activeTicket(CarPlayActiveTicketReducer.State(
+                    activeTicket: ticket,
+                    ticket: .init(
+                        activeTicket: ticket,
+                        resorceProvider: reducerClient.resourceProvider
+                    ),
+                    location: location
+                ))
+                return .none
+            case .onInactiveTicket:
+                state.destination = .inactiveTicket(CarPlayInactiveTicketReducer.State())
                 return .none
             }
         }
-        .ifLet(\.$destination, action: \.destination)
-        .ifLet(\.$menu, action: \.menu) {
-            MenuFeature()
+        .ifLet(\.$destination, action: \.destination) {
+            Destination.body
+        }
+    }
+
+    private func performCheckRequirements() -> Effect<Action> {
+        return .run { send in
+            if let requirementsError = reducerClient.checkRequirements() {
+                await send(.onCheckRequirementsError(requirementsError))
+            } else {
+                await send(.onCheckRequirementsSuccess)
+            }
+        }
+    }
+
+    private func perfomLoadParkingData() -> Effect<Action> {
+        return .run { send in
+            do {
+                try await reducerClient.getParkingData()
+                await send(.onLoadParkingDataSuccess)
+            } catch {
+                let message: String = errorParser.getMessage(error: error)
+                await send(.onLoadParkingDataError(errorMessage: message))
+            }
+        }
+    }
+
+    private func performCheckMobiletIdAndCarList() -> Effect<Action> {
+        return .run { send in
+            do {
+                try reducerClient.checkMobiletIdAndCarList()
+                await send(.onCheckMobiletIdAndCarListSuccess)
+            } catch {
+                await send(.onCheckMobiletIdAndCarListError)
+            }
+        }
+    }
+
+    private func performCheckLocation() -> Effect<Action> {
+        return .run { send in
+            let result = await reducerClient.checkLocationPermissions()
+            switch result {
+            case .disabled:
+                await send(.onCheckLocationPermissionError)
+            case .enabled:
+                await send(.onCheckLocationPermissionSuccess)
+            }
+        }
+    }
+
+    private func performGetActiveTicket() -> Effect<Action> {
+        return .run { send in
+            if let activeTicket = reducerClient.getActiveTicket() {
+                do {
+                    let location = try reducerClient.getLocation()
+                    await send(.onActiveTicket(activeTicket, location))
+                } catch {
+                    await send(.onCheckLocationPermissionError)
+                }
+            } else {
+                await send(.onInactiveTicket)
+            }
         }
     }
 }
-
-private extension MainFeature {
-    func observeToolbarMenuTapped(_ state: State) -> Effect<Action> {
-        .publisher {
-            state.$isToolbarMenuTapped.publisher
-                .removeDuplicates()
-                .filter { $0 }
-                .map { _ in .mainMenuTapped }
-                .eraseToAnyPublisher()
-        }
-        .cancellable(id: CancelID.menu, cancelInFlight: true)
-    }
-}
-
-extension MainFeature {
-    public enum BottomBarAction: Sendable {
-        case featuresTapped
-        case notificationsTapped
-        case profileTapped
-        case searchTapped
-    }
-
-    @Reducer(state: .equatable, .sendable, action: .sendable)
-    public enum Content {
-        case dailySales(DailySalesNavigationFeature)
-        case intlMarketTracker(IntlMarketTrackerNavigationFeature)
-    }
-
-    @Reducer(state: .sendable, .equatable, action: .sendable)
-    public enum Destination {
-        case features(FeaturesFeature)
-        case notifications(NotificationsFeature)
-        case profile(ProfileFeature)
-        case search(SearchFeature)
-    }
-}
-
-private enum CancelID { case menu }
-
-
-
-
-/Users/boguspi2/GenieNG-iOS/Packages/AppComposition/Sources/AppCompositionPresentation/Views/Main/MainView.swift:70:37 Cannot convert value of type 'Store<PresentationState<MenuFeature.State>, PresentationAction<MenuFeature.Action>>' to expected argument type 'StoreOf<MenuFeature>' (aka 'Store<MenuFeature.State, MenuFeature.Action>')
