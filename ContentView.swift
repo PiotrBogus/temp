@@ -109,3 +109,23 @@ public struct MainView: View {
         MainFeature()
     })
 }
+
+
+
+
+import SwiftUI
+
+extension View {
+    /// Executes an action after a given animation duration.
+    func onAnimationCompleted<Value: Equatable>(
+        for value: Value,
+        duration: Double,
+        perform action: @escaping () -> Void
+    ) -> some View {
+        self.onChange(of: value) { _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+                action()
+            }
+        }
+    }
+}
