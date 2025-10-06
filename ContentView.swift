@@ -1,208 +1,155 @@
-import CarPlay
+import XCTest
 import ComposableArchitecture
-import Dependencies
-import IKOCommon
+import MapKit
+@testable import YourModuleName
 
-@Reducer
-struct CarPlayInitialReducer: Sendable {
-    @ObservableState
-    struct State: Equatable, Sendable {
-        @Presents var destination: Destination.State?
+@MainActor
+final class CarPlayInitialReducerTests: XCTestCase {
+    func test_onAppear_withRequirementsError() async {
+        let testErrorMessage = "Requirements failed"
 
-        var templateState: TemplateState = .willAppear
-    }
+        let store = TestStore(
+            initialState: CarPlayInitialReducer.State(),
+            reducer: { CarPlayInitialReducer() }
+        ) {
+            $0.initialReducerClient.checkRequirements = { testErrorMessage }
+            $0.initialReducerClient.resourceProvider.loadingSplashText = "Loading..."
+            $0.initialReducerClient.resourceProvider.alertButtonTryAgainText = "Try again"
+            $0.carPlayParkingsErrorParser.getMessage = { _ in "ParsedError" }
+        }
 
-    enum TemplateState: Equatable {
-        case willAppear
-        case loading(String)
-        case error(CarPlayErrorTemplateModel<CarPlayInitialErrorType>)
+        await store.send(.onAppear) {
+            $0.templateState = .loading("Loading...")
+        }
 
-        static func == (lhs: TemplateState, rhs: TemplateState) -> Bool {
-            switch (lhs, rhs) {
-            case (.willAppear, .willAppear),
-                (.loading, .loading),
-                (.error, .error):
-                return true
-            default:
-                return false
-            }
+        await store.receive(\.onCheckRequirementsError, testErrorMessage) {
+            $0.templateState = .error(.init(
+                type: .checkRequirementsError,
+                title: testErrorMessage,
+                description: nil,
+                buttonTitle: "Try again"
+            ))
         }
     }
 
-    enum Action: Sendable {
-        case destination(PresentationAction<Destination.Action>)
-        case onAppear
-        case refresh
-        case onErrorButtonTap(CarPlayInitialErrorType)
-        case onCheckRequirementsError(String)
-        case onCheckRequirementsSuccess
-        case onLoadParkingDataSuccess
-        case onLoadParkingDataError(errorMessage: String)
-        case onCheckMobiletIdAndCarListSuccess
-        case onCheckMobiletIdAndCarListError
-        case onCheckLocationPermissionSuccess
-        case onCheckLocationPermissionError
-        case onActiveTicket(CarPlayParkingsTicketListItem, MKMapItem)
-        case onInactiveTicket
+    func test_onAppear_success_flow_to_loadParkingData() async {
+        let store = TestStore(
+            initialState: CarPlayInitialReducer.State(),
+            reducer: { CarPlayInitialReducer() }
+        ) {
+            $0.initialReducerClient.checkRequirements = { nil }
+            $0.initialReducerClient.getParkingData = {}
+            $0.initialReducerClient.checkMobiletIdAndCarList = {}
+            $0.initialReducerClient.checkLocationPermissions = { .disabled }
+            $0.initialReducerClient.resourceProvider.loadingSplashText = "Loading..."
+            $0.initialReducerClient.resourceProvider.alertButtonTryAgainText = "OK"
+            $0.carPlayParkingsErrorParser.getMessage = { _ in "ErrorMsg" }
+        }
+
+        await store.send(.onAppear) {
+            $0.templateState = .loading("Loading...")
+        }
+
+        await store.receive(\.onCheckRequirementsSuccess) {
+            $0.templateState = .loading("Loading...")
+        }
+
+        await store.receive(\.onLoadParkingDataSuccess)
+        await store.receive(\.onCheckMobiletIdAndCarListSuccess)
+        await store.receive(\.onCheckLocationPermissionError) {
+            $0.templateState = .error(.init(
+                type: .locationPermissionError,
+                title: "Location disabled",
+                description: nil,
+                buttonTitle: "OK"
+            ))
+        }
     }
 
-    @Reducer(state: .equatable)
-    enum Destination {
-        case inactiveTicket(CarPlayInactiveTicketReducer)
-        case activeTicket(CarPlayActiveTicketReducer)
+    func test_onLoadParkingDataError_setsErrorTemplate() async {
+        struct DummyError: Error {}
+        let store = TestStore(
+            initialState: CarPlayInitialReducer.State(),
+            reducer: { CarPlayInitialReducer() }
+        ) {
+            $0.initialReducerClient.checkRequirements = { nil }
+            $0.initialReducerClient.getParkingData = { throw DummyError() }
+            $0.carPlayParkingsErrorParser.getMessage = { _ in "Network error" }
+            $0.initialReducerClient.resourceProvider.alertButtonTryAgainText = "Retry"
+            $0.initialReducerClient.resourceProvider.loadingSplashText = "Loading..."
+        }
+
+        await store.send(.onAppear) {
+            $0.templateState = .loading("Loading...")
+        }
+
+        await store.receive(\.onCheckRequirementsSuccess)
+        await store.receive(\.onLoadParkingDataError, "Network error") {
+            $0.templateState = .error(.init(
+                type: .loadParkingDataError,
+                title: "Network error",
+                description: nil,
+                buttonTitle: "Retry"
+            ))
+        }
     }
 
-    @Dependency(\.initialReducerClient) private var reducerClient
-    @Dependency(\.carPlayParkingsErrorParser) private var errorParser
-
-    var body: some ReducerOf<Self> {
-        Reduce { state, action in
-            switch action {
-            case .destination:
-                return .none
-            case .onAppear, .refresh:
-                if state.templateState != .loading("") {
-                    state.templateState = .loading(reducerClient.resourceProvider.loadingSplashText)
-                }
-                return performCheckRequirements()
-            case let .onCheckRequirementsError(errorMessage):
-                state.templateState =
-                    .error(.init(
-                        type: .checkRequirementsError,
-                        title: errorMessage,
-                        description: nil,
-                        buttonTitle: reducerClient.resourceProvider.alertButtonTryAgainText
-                    ))
-                return .none
-            case .onCheckRequirementsSuccess:
-                if state.templateState != .loading("") {
-                    state.templateState = .loading(reducerClient.resourceProvider.loadingSplashText)
-                }
-                return perfomLoadParkingData()
-            case .onLoadParkingDataSuccess:
-                return performCheckMobiletIdAndCarList()
-            case let .onLoadParkingDataError(errorMessage):
-                state.templateState =
-                    .error(.init(
-                        type: .loadParkingDataError,
-                        title: errorMessage,
-                        description: nil,
-                        buttonTitle: reducerClient.resourceProvider.alertButtonTryAgainText
-                    ))
-                return .none
-            case .onCheckMobiletIdAndCarListSuccess:
-                return performCheckLocation()
-            case .onCheckMobiletIdAndCarListError:
-                state.templateState =
-                    .error(.init(
-                        type: .checkMobiletIdAndCarListError,
-                        title: reducerClient.resourceProvider.mobiletNotFoundText,
-                        description: nil,
-                        buttonTitle: reducerClient.resourceProvider.alertButtonTryAgainText
-                    ))
-                return .none
-            case .onCheckLocationPermissionSuccess:
-                return performGetActiveTicket()
-            case .onCheckLocationPermissionError:
-                state.templateState =
-                    .error(.init(
-                        type: .locationPermissionError,
-                        title: reducerClient.resourceProvider.locationDisabledText,
-                        description: nil,
-                        buttonTitle: reducerClient.resourceProvider.alertButtonTryAgainText
-                    ))
-                return .none
-            case let .onErrorButtonTap(errorType):
-                if state.templateState != .loading("") {
-                    state.templateState = .loading(reducerClient.resourceProvider.loadingSplashText)
-                }
-                switch errorType {
-                case .locationPermissionError:
-                    return performCheckLocation()
-                case .checkMobiletIdAndCarListError:
-                    return perfomLoadParkingData()
-                case .loadParkingDataError:
-                    return perfomLoadParkingData()
-                case .checkRequirementsError:
-                    return performCheckRequirements()
-                }
-            case let .onActiveTicket(ticket, location):
-                state.destination = .activeTicket(CarPlayActiveTicketReducer.State(
-                    activeTicket: ticket,
-                    ticket: .init(
-                        activeTicket: ticket,
-                        resorceProvider: reducerClient.resourceProvider
-                    ),
-                    location: location
+    func test_onErrorButtonTap_retries_flow() async {
+        let store = TestStore(
+            initialState: CarPlayInitialReducer.State(
+                templateState: .error(.init(
+                    type: .checkRequirementsError,
+                    title: "Error",
+                    description: nil,
+                    buttonTitle: "Retry"
                 ))
-                return .none
-            case .onInactiveTicket:
-                state.destination = .inactiveTicket(CarPlayInactiveTicketReducer.State())
-                return .none
-            }
+            ),
+            reducer: { CarPlayInitialReducer() }
+        ) {
+            $0.initialReducerClient.checkRequirements = { nil }
+            $0.initialReducerClient.resourceProvider.loadingSplashText = "Loading..."
         }
-        .ifLet(\.$destination, action: \.destination) {
-            Destination.body
+
+        await store.send(.onErrorButtonTap(.checkRequirementsError)) {
+            $0.templateState = .loading("Loading...")
+        }
+
+        await store.receive(\.onCheckRequirementsSuccess)
+    }
+
+    func test_onActiveTicket_setsDestination() async {
+        let dummyTicket = CarPlayParkingsTicketListItem.mock
+        let dummyLocation = MKMapItem()
+
+        let store = TestStore(
+            initialState: CarPlayInitialReducer.State(),
+            reducer: { CarPlayInitialReducer() }
+        ) {
+            $0.initialReducerClient.resourceProvider.loadingSplashText = "Loading..."
+        }
+
+        await store.send(.onActiveTicket(dummyTicket, dummyLocation)) {
+            $0.destination = .activeTicket(
+                CarPlayActiveTicketReducer.State(
+                    activeTicket: dummyTicket,
+                    ticket: .init(
+                        activeTicket: dummyTicket,
+                        resorceProvider: $0.initialReducerClient.resourceProvider
+                    ),
+                    location: dummyLocation
+                )
+            )
         }
     }
 
-    private func performCheckRequirements() -> Effect<Action> {
-        return .run { send in
-            if let requirementsError = reducerClient.checkRequirements() {
-                await send(.onCheckRequirementsError(requirementsError))
-            } else {
-                await send(.onCheckRequirementsSuccess)
-            }
-        }
-    }
+    func test_onInactiveTicket_setsDestination() async {
+        let store = TestStore(
+            initialState: CarPlayInitialReducer.State(),
+            reducer: { CarPlayInitialReducer() }
+        )
 
-    private func perfomLoadParkingData() -> Effect<Action> {
-        return .run { send in
-            do {
-                try await reducerClient.getParkingData()
-                await send(.onLoadParkingDataSuccess)
-            } catch {
-                let message: String = errorParser.getMessage(error: error)
-                await send(.onLoadParkingDataError(errorMessage: message))
-            }
-        }
-    }
-
-    private func performCheckMobiletIdAndCarList() -> Effect<Action> {
-        return .run { send in
-            do {
-                try reducerClient.checkMobiletIdAndCarList()
-                await send(.onCheckMobiletIdAndCarListSuccess)
-            } catch {
-                await send(.onCheckMobiletIdAndCarListError)
-            }
-        }
-    }
-
-    private func performCheckLocation() -> Effect<Action> {
-        return .run { send in
-            let result = await reducerClient.checkLocationPermissions()
-            switch result {
-            case .disabled:
-                await send(.onCheckLocationPermissionError)
-            case .enabled:
-                await send(.onCheckLocationPermissionSuccess)
-            }
-        }
-    }
-
-    private func performGetActiveTicket() -> Effect<Action> {
-        return .run { send in
-            if let activeTicket = reducerClient.getActiveTicket() {
-                do {
-                    let location = try reducerClient.getLocation()
-                    await send(.onActiveTicket(activeTicket, location))
-                } catch {
-                    await send(.onCheckLocationPermissionError)
-                }
-            } else {
-                await send(.onInactiveTicket)
-            }
+        await store.send(.onInactiveTicket) {
+            $0.destination = .inactiveTicket(CarPlayInactiveTicketReducer.State())
         }
     }
 }
