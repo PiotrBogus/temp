@@ -1,131 +1,52 @@
-//
-//  MainView.swift
-//
-
-import ComposableArchitecture
-import KpiDailySalesPresentation
-import KpiIntlMarketTrackerPresentation
 import SwiftUI
+import UIKit
 
-public struct MainView: View {
-    @Bindable var store: StoreOf<MainFeature>
-    private let overlayWindow = MenuOverlayWindow()
+final class MenuOverlayWindow {
+    private var hostingController: UIHostingController<AnyView>?
 
-    public init(store: StoreOf<MainFeature>) {
-        self.store = store
-    }
-
-    public var body: some View {
-        ZStack {
-            content
-                .toolbar {
-                    MainBottomToolbarContent { store.send(.bottomBar($0)) }
-                }
-                .onFirstAppear { store.send(.onFirstAppear) }
-                .onAppear { store.send(.onAppear) }
-                .sheet(
-                    store: store.scope(state: \.$destination, action: \.destination)
-                ) { destinationStore in
-                    switch destinationStore.case {
-                    case let .features(store):
-                        FeaturesView(store: store)
-                    case let .notifications(store):
-                        NotificationsView(store: store)
-                    case let .profile(store):
-                        ProfileView(store: store)
-                    case let .search(store):
-                        SearchView(store: store)
-                    }
-                }
+    func show<Content: View>(_ view: Content) {
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let rootWindow = windowScene.windows.first else {
+            return
         }
-        .onChange(of: store.menu != nil) { _, isMenuOverlayVisible in
-            if isMenuOverlayVisible {
-                showMenuOverlay()
-            } else {
-                hideMenuOverlay()
-            }
+
+        // Usuń stary overlay jeśli istnieje
+        hide()
+
+        let hosting = UIHostingController(rootView: AnyView(view))
+        hosting.view.backgroundColor = .clear
+        hosting.view.frame = rootWindow.bounds
+        hosting.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        hosting.view.isUserInteractionEnabled = true
+
+        // Dodaj jako subview — ale na samą górę hierarchii
+        rootWindow.addSubview(hosting.view)
+
+        // Animacja fade-in
+        hosting.view.alpha = 0
+        UIView.animate(withDuration: 0.25) {
+            hosting.view.alpha = 1
         }
+
+        hostingController = hosting
     }
 
-    private func showMenuOverlay() {
-        overlayWindow.show(menuOverlay)
-    }
+    func hide(animated: Bool = true) {
+        guard let view = hostingController?.view else { return }
 
-    private func hideMenuOverlay() {
-        overlayWindow.hide()
-    }
-
-    @ViewBuilder
-    var content: some View {
-        switch store.scope(state: \.content, action: \.content).case {
-        case let .dailySales(store):
-            DailySalesNavigationView(store: store)
-        case let .intlMarketTracker(store):
-            IntlMarketTrackerNavigationView(store: store)
+        let remove = {
+            view.removeFromSuperview()
+            self.hostingController = nil
         }
-    }
 
-    @ViewBuilder
-    var menuOverlay: some View {
-        IfLetStore(
-            store.scope(state: \.$menu, action: \.menu)
-        ) { menuStore in
-            GeometryReader { geometry in
-                ZStack(alignment: .trailing) {
-                    Color.black
-                        .opacity(store.isMenuVisible ? 0.5 : 0.0)
-                        .ignoresSafeArea()
-                        .onTapGesture {
-                            _ = withAnimation(.easeInOut(duration: 0.3)) {
-                                store.send(.menu(.presented(.delegate(.dismissMenu))))
-                            }
-                        }
-
-                    MenuView(store: menuStore)
-                        .frame(
-                            width: store.deviceOrientation.isLandscape ? geometry.size.width : geometry.size.width * 0.75,
-                            height: geometry.size.height
-                        )
-                        .background(Color.white)
-                        .shadow(radius: 8)
-                        .offset(x: store.isMenuVisible ? 0 : geometry.size.width)
-                        .animation(.easeInOut(duration: 0.3), value: store.isMenuVisible)
-                }
-                .onAppear {
-                    _ = withAnimation(.easeInOut(duration: 0.3)) {
-                        store.send(.updateMenuVisibility(true))
-                    }
-                }
-                .onDisappear {
-                    store.send(.updateMenuVisibility(false))
-                }
-            }
-        }
-    }
-}
-
-#Preview {
-    MainView(store: Store(initialState: MainFeature.State()) {
-        MainFeature()
-    })
-}
-
-
-
-
-import SwiftUI
-
-extension View {
-    /// Executes an action after a given animation duration.
-    func onAnimationCompleted<Value: Equatable>(
-        for value: Value,
-        duration: Double,
-        perform action: @escaping () -> Void
-    ) -> some View {
-        self.onChange(of: value) { _, _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
-                action()
-            }
+        if animated {
+            UIView.animate(withDuration: 0.25, animations: {
+                view.alpha = 0
+            }, completion: { _ in
+                remove()
+            })
+        } else {
+            remove()
         }
     }
 }
