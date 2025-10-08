@@ -1,138 +1,308 @@
-import XCTest
 import ComposableArchitecture
-@testable import CarPlayParkings
+import GenieCommonPresentation
+import Foundation
+import SwiftUI
 
-@MainActor
-final class CarPlayBuyTicketReducerTests: XCTestCase {
+@Reducer
+public struct MenuFeature: Sendable {
+    public init() {}
 
-    func test_onAppear_loadsData_success() async {
-        let store = TestStore(
-            initialState: CarPlayBuyTicketReducer.State(),
-            reducer: { CarPlayBuyTicketReducer() },
-            withDependencies: {
-                $0.buyTicketReducerClient = .success
-                $0.carPlayParkingsErrorParser = .mock
-                $0.carPlayResourceProvider = CarPlayParkingsResourcesMock()
-            }
-        )
+    @ObservableState
+    public struct State: Equatable, Sendable {
+        var items: IdentifiedArrayOf<MenuItemFeature.State> = []
+        @Shared(.deviceOrientation) var deviceOrientation: DeviceOrientation = .unknown
+        let preselectedItemId: String?
+        
+        public var appVersion: String = ""
+        public var appBuild: String = ""
+        public var appEnvironment: String = ""
 
-        await store.send(.onAppear)
-
-        await store.receive(where: { action in
-            if case .effect(.didLoadData) = action { return true }
-            return false
-        }) {
-            $0.data = .fixture()
-            $0.templateState = .didAppear
+        public init(preselectedItemId: String?) {
+            self.preselectedItemId = preselectedItemId
         }
     }
 
-    func test_onAppear_loadsData_failure_fallsBackToRefresh() async {
-        let store = TestStore(
-            initialState: CarPlayBuyTicketReducer.State(),
-            reducer: { CarPlayBuyTicketReducer() },
-            withDependencies: {
-                $0.buyTicketReducerClient = .failure
-                $0.carPlayParkingsErrorParser = .mock
-                $0.carPlayResourceProvider = CarPlayParkingsResourcesMock()
+    public enum Action: Sendable {
+        case delegate(Delegate)
+        case onFirstAppear
+        case didLoadMenu([MenuItemFeature.State])
+        case dismiss
+        case items(IdentifiedActionOf<MenuItemFeature>)
+    }
+
+    @Dependency(\.menuFeatureClient.log) private var log
+    @Dependency(\.menuFeatureClient.loadMenuItems) private var loadMenuItems
+    @Dependency(\.menuFeatureClient.appInfoViewModel) private var appInfoViewModel
+
+    public var body: some Reducer<State, Action> {
+        Reduce { state, action in
+            switch action {
+            case .onFirstAppear:
+                log(.debug, "menu did appear for first time")
+                if let viewModel = appInfoViewModel() {
+                    state.appVersion = viewModel.version
+                    state.appBuild = viewModel.build
+                    state.appEnvironment = viewModel.environment
+                }
+                return loadMenu(selectedItemId: state.preselectedItemId)
+            case let .didLoadMenu(items):
+                log(.debug, "did load menu")
+                state.items = IdentifiedArrayOf(uniqueElements: items)
+                return .none
+            case .delegate:
+                return .none
+            case .dismiss:
+                return .send(.delegate(.dismissMenu))
+            case let .items(.element(id: _, action: .delegate(.didTapItem(id, isExpand)))):
+                if isExpand {
+                    keepAncestorsAndCollapseOthers(expandedId: id, in: &state.items)
+                    return .none
+                } else {
+                    deselectAllItems(beside: id, in: &state.items)
+                    return .send(.delegate(.didSelectMenuItem(id)))
+                }
+            case .items:
+                return .none
             }
-        )
-
-        await store.send(.onAppear)
-
-        await store.receive(where: { action in
-            if case .refresh = action { return true }
-            return false
-        }) {
-            $0.templateState = .loading(
-                store.dependencies.buyTicketReducerClient.resourceProvider.loadingSplashText
-            )
+        }
+        .forEach(\.items, action: \.items) {
+            MenuItemFeature()
         }
     }
 
-    func test_onNextButtonTap_validationFailure() async {
-        let model = CarPlayParkingsNewParkingFormModel.fixture()
-        model.selectedCar = nil
-        model.selectedAccount = nil
-        model.selectedTimeOption = nil
-        model.selectedSubarea = nil
-
-        let store = TestStore(
-            initialState: CarPlayBuyTicketReducer.State(data: model),
-            reducer: { CarPlayBuyTicketReducer() },
-            withDependencies: {
-                $0.buyTicketReducerClient = .success
-                $0.carPlayParkingsErrorParser = .mock
-                $0.carPlayResourceProvider = CarPlayParkingsResourcesMock()
-            }
-        )
-
-        await store.send(.template(.onNextButtonTap))
-
-        await store.receive(where: { action in
-            if case .effect(.onValidationFormError) = action { return true }
-            return false
-        }) {
-            $0.templateState = .validationError(.init(), [])
+    private func deselectAllItems(
+        beside id: String,
+        in items: inout IdentifiedArrayOf<MenuItemFeature.State>
+    ) {
+        for index in items.indices {
+            items[index].isSelected = items[index].id == id
+            deselectAllItems(beside: id, in: &items[index].identifiedArrayOfChildrens)
         }
     }
 
-    func test_onNextButtonTap_validationSuccess_andPreauthSuccess() async {
-        let model = CarPlayParkingsNewParkingFormModel.fixture()
+    @discardableResult
+    private func keepAncestorsAndCollapseOthers(
+        expandedId: String,
+        in items: inout IdentifiedArrayOf<MenuItemFeature.State>
+    ) -> Bool {
+        var found = false
+        for index in items.indices {
+            if items[index].id == expandedId {
+                found = true
+                keepAncestorsAndCollapseOthers(
+                    expandedId: expandedId,
+                    in: &items[index].identifiedArrayOfChildrens
+                )
+            } else {
+                let childHasExpanded = keepAncestorsAndCollapseOthers(
+                    expandedId: expandedId,
+                    in: &items[index].identifiedArrayOfChildrens
+                )
 
-        let store = TestStore(
-            initialState: CarPlayBuyTicketReducer.State(data: model),
-            reducer: { CarPlayBuyTicketReducer() },
-            withDependencies: {
-                $0.buyTicketReducerClient = .success
-                $0.carPlayParkingsErrorParser = .mock
-                $0.carPlayResourceProvider = CarPlayParkingsResourcesMock()
+                if childHasExpanded {
+                    items[index].isExpanded = true
+                    found = true
+                } else {
+                    items[index].isExpanded = false
+                }
             }
-        )
-
-        await store.send(.template(.onNextButtonTap))
-
-        await store.receive(where: { action in
-            if case .effect(.onValidationFormSuccess) = action { return true }
-            return false
-        }) {
-            $0.templateState = .preauthNewParkingProcessingSplash
         }
 
-        await store.receive(where: { action in
-            if case .effect(.didPreauthorizeParking) = action { return true }
-            return false
-        }) {
-            $0.destination = .confirmParking(
-                CarPlayConfirmParkingReducer.State(preauthResponse: .fixture, model: model)
-            )
+        return found
+    }
+}
+
+extension MenuFeature {
+    public enum Delegate: Sendable, Equatable {
+        case dismissMenu
+        case didSelectMenuItem(String)
+    }
+}
+
+private extension MenuFeature {
+    private func loadMenu(selectedItemId: String?) -> Effect<Action> {
+        return .run { send in
+            let groups = try? await loadMenuItems(selectedItemId)
+            await send(.didLoadMenu(groups ?? []))
+        }
+    }
+}
+
+
+
+import ComposableArchitecture
+import AppCompositionData
+import AppCompositionDomain
+import Dependencies
+import DependenciesMacros
+import Foundation
+import GenieLogger
+import Network
+
+@DependencyClient
+struct MenuFeatureClient: DependencyKey {
+    var loadMenuItems: @Sendable (String?) async throws -> [MenuItemFeature.State]
+    var log: @Sendable (_ level: LogLevel, _ message: String) -> Void
+    var appInfoViewModel: @Sendable () -> AppInfoViewModel?
+
+    static let liveValue: MenuFeatureClient = {
+        @Dependency(\.logger) var logger
+        @Dependency(\.menuRepository) var menuRepository
+        @Dependency(\.appBundleRepository) var appBundleRepository
+
+        @discardableResult
+        @Sendable func expandParentsIfChildSelected(
+            in items: inout [MenuItemFeature.State]
+        ) -> Bool {
+            var containsSelected = false
+            for index in items.indices {
+                var children = items[index].children
+                let childContainsSelected = expandParentsIfChildSelected(in: &children)
+                items[index].children = children
+                if items[index].isSelected || childContainsSelected {
+                    items[index].isExpanded = true
+                    containsSelected = true
+                }
+            }
+            return containsSelected
+        }
+
+        return MenuFeatureClient(
+            loadMenuItems: { selectedItemId in
+                do {
+                    let apiItems = try await menuRepository.loadMenu()
+                    let treeBuilder = TreeStructureBuilder<MenuItemFeature.State, MenuItem> { item  in
+                        MenuItemFeature.State(
+                            children: [],
+                            id: item.id,
+                            parentId: item.parentId,
+                            title: item.title,
+                            isSelected: item.id == selectedItemId
+                        )
+                    }
+                    var tree = treeBuilder.buildTree(apiItems)
+                    expandParentsIfChildSelected(in: &tree)
+                    return tree
+                } catch let error {
+                    throw error
+                }
+            },
+            log: { level, message in
+                logger.log(level: level, message)
+            },
+            appInfoViewModel: {
+                let appInfo = appBundleRepository.getAppInfo()
+                return AppInfoViewModel(
+                    version: appInfo.version ?? "",
+                    build: appInfo.build ?? "",
+                    environment: appInfo.environment?.rawValue.capitalized ?? ""
+                )
+            }
+        )
+    }()
+}
+
+extension DependencyValues {
+    var menuFeatureClient: MenuFeatureClient {
+        get { self[MenuFeatureClient.self] }
+        set { self[MenuFeatureClient.self] = newValue }
+    }
+}
+
+
+
+import Foundation
+import ComposableArchitecture
+import AppCompositionDomain
+
+@Reducer
+public struct MenuItemFeature: Sendable {
+    public init() {}
+
+    @ObservableState
+    public struct State: TreeItemResult, Identifiable, Sendable {
+        public var children: [MenuItemFeature.State] = []
+        var identifiedArrayOfChildrens: IdentifiedArrayOf<MenuItemFeature.State> = []
+
+        public let id: String
+        public let parentId: String?
+        let title: String
+        var isExpanded: Bool = false
+        var isSelected: Bool = false
+
+        var isPossibleToExpand: Bool {
+            children.isEmpty == false
         }
     }
 
-    func test_onNextButtonTap_validationSuccess_andPreauthFailure() async {
-        let model = CarPlayParkingsNewParkingFormModel.fixture()
+    public indirect enum Action: Sendable {
+        case onAppear
+        case delegate(Delegate)
+        case didTapItem(id: String)
+        case children(IdentifiedActionOf<MenuItemFeature>)
+    }
 
-        let failingClient = CarPlayBuyTicketReducerClient.custom(
-            preauthorizeParking: { _ in throw CarPlayError.missingData }
-        )
+    @Dependency(\.menuItemFeatureClient.log) private var log
 
-        let store = TestStore(
-            initialState: CarPlayBuyTicketReducer.State(data: model),
-            reducer: { CarPlayBuyTicketReducer() },
-            withDependencies: {
-                $0.buyTicketReducerClient = failingClient
-                $0.carPlayParkingsErrorParser = .mock
-                $0.carPlayResourceProvider = CarPlayParkingsResourcesMock()
+    public var body: some Reducer<State, Action> {
+        Reduce { state, action in
+            switch action {
+            case .onAppear:
+                state.identifiedArrayOfChildrens = IdentifiedArrayOf(uniqueElements: state.children)
+                return .none
+            case let .didTapItem(id):
+                log(.debug, "did tap item: \(id)")
+                if state.isPossibleToExpand {
+                    state.isExpanded = !state.isExpanded
+                } else {
+                    state.isSelected = !state.isSelected
+                }
+                return .send(.delegate(.didTapItem(id: id, isExpand: state.isPossibleToExpand)))
+            case let .children(.element(id: _, action: .delegate(.didTapItem(id, isExpand)))):
+                return .send(.delegate(.didTapItem(id: id, isExpand: isExpand)))
+            case .children:
+                return .none
+            case .delegate:
+                return .none
+            }
+        }
+        .forEach(\.identifiedArrayOfChildrens, action: \.children) {
+            MenuItemFeature()
+        }
+    }
+}
+
+extension MenuItemFeature {
+    public enum Delegate: Sendable, Equatable {
+        case didTapItem(id: String, isExpand: Bool)
+    }
+}
+
+
+
+import Dependencies
+import DependenciesMacros
+import Foundation
+import GenieLogger
+
+@DependencyClient
+struct MenuItemFeatureClient: DependencyKey {
+    var log: @Sendable (_ level: LogLevel, _ message: String) -> Void
+
+    static let liveValue: MenuItemFeatureClient = {
+        @Dependency(\.logger) var logger
+
+        return MenuItemFeatureClient(
+            log: { level, message in
+                logger.log(level: level, message)
             }
         )
+    }()
+}
 
-        await store.send(.template(.onNextButtonTap))
-
-        await store.receive(where: { action in
-            if case .effect(.onValidationFormError) = action { return true }
-            return false
-        }) {
-            $0.templateState = .validationError(UUID(), [.areaNotSelected, .timeOptionNotSelected])
-        }
+extension DependencyValues {
+    var menuItemFeatureClient: MenuItemFeatureClient {
+        get { self[MenuItemFeatureClient.self] }
+        set { self[MenuItemFeatureClient.self] = newValue }
     }
 }
