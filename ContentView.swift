@@ -7,7 +7,7 @@ public struct MenuItemFeature: Sendable {
     public init() {}
 
     @ObservableState
-    public struct State: TreeItemResult, Identifiable, Sendable {
+    public struct State: TreeItemResult, Identifiable, Sendable, Equatable {
         public var children: [MenuItemFeature.State] = []
         var identifiedArrayOfChildrens: IdentifiedArrayOf<MenuItemFeature.State> = []
 
@@ -18,11 +18,11 @@ public struct MenuItemFeature: Sendable {
         var isSelected: Bool = false
 
         var isPossibleToExpand: Bool {
-            children.isEmpty == false
+            !children.isEmpty
         }
     }
 
-    public indirect enum Action: Sendable {
+    public enum Action: Sendable, Equatable {
         case onAppear
         case delegate(Delegate)
         case didTapItem(id: String)
@@ -37,19 +37,22 @@ public struct MenuItemFeature: Sendable {
             case .onAppear:
                 state.identifiedArrayOfChildrens = IdentifiedArrayOf(uniqueElements: state.children)
                 return .none
+
             case let .didTapItem(id):
                 log(.debug, "did tap item: \(id)")
+
                 if state.isPossibleToExpand {
-                    state.isExpanded = !state.isExpanded
+                    state.isExpanded.toggle()
                 } else {
-                    state.isSelected = !state.isSelected
+                    state.isSelected.toggle()
                 }
-                return .send(.delegate(.didTapItem(.init(id: id, isExpand: state.isPossibleToExpand))))
-            case let .children(.element(id: _, action: .delegate(.didTapItem(id, isExpand)))):
-                return .send(.delegate(.didTapItem(.init(id: id, isExpand: isExpand))))
-            case .children:
-                return .none
-            case .delegate:
+
+                return .send(.delegate(.didTapItem(MenuItemTapModel(id: id, isExpand: state.isPossibleToExpand))))
+
+            case let .children(.element(_, .delegate(.didTapItem(model)))):
+                return .send(.delegate(.didTapItem(model)))
+
+            case .children, .delegate:
                 return .none
             }
         }
