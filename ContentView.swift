@@ -1,50 +1,72 @@
-import XCTest
+import Foundation
 import ComposableArchitecture
-@testable import YourModuleName
+import AppCompositionDomain
 
-@MainActor
-final class MenuItemFeatureTests: XCTestCase {
+@Reducer
+public struct MenuItemFeature: Sendable {
+    public init() {}
 
-    func testTapExpandableItem_TogglesExpansion() async {
-        // Given
-        let child = MenuItemFeature.State(children: [], id: "c1", parentId: "p1", title: "Child")
-        let item = MenuItemFeature.State(children: [child], id: "p1", parentId: nil, title: "Parent", isExpanded: false)
+    @ObservableState
+    public struct State: TreeItemResult, Identifiable, Sendable {
+        public var children: [MenuItemFeature.State] = []
+        var identifiedArrayOfChildrens: IdentifiedArrayOf<MenuItemFeature.State> = []
 
-        let store = TestStore(initialState: item) {
-            MenuItemFeature()
-        } withDependencies: {
-            $0.menuItemFeatureClient.log = { _, _ in }
+        public let id: String
+        public let parentId: String?
+        let title: String
+        var isExpanded: Bool = false
+        var isSelected: Bool = false
+
+        var isPossibleToExpand: Bool {
+            children.isEmpty == false
         }
-
-        // When
-        await store.send(\.onAppear) {
-            $0.identifiedArrayOfChildrens = IdentifiedArrayOf(uniqueElements: $0.children)
-        }
-
-        await store.send(\.didTapItem, "p1") {
-            $0.isExpanded = true // element ma dzieci, więc rozwijamy
-        }
-
-        // Then
-        await store.receive(\.delegate.didTapItem, ("p1", true))
     }
 
-    func testTapLeafItem_TogglesSelection() async {
-        // Given
-        let item = MenuItemFeature.State(children: [], id: "leaf1", parentId: nil, title: "Leaf", isSelected: false)
-
-        let store = TestStore(initialState: item) {
-            MenuItemFeature()
-        } withDependencies: {
-            $0.menuItemFeatureClient.log = { _, _ in }
-        }
-
-        // When
-        await store.send(\.didTapItem, "leaf1") {
-            $0.isSelected = true // element bez dzieci — zaznaczany
-        }
-
-        // Then
-        await store.receive(\.delegate.didTapItem, ("leaf1", false))
+    public indirect enum Action: Sendable {
+        case onAppear
+        case delegate(Delegate)
+        case didTapItem(id: String)
+        case children(IdentifiedActionOf<MenuItemFeature>)
     }
+
+    @Dependency(\.menuItemFeatureClient.log) private var log
+
+    public var body: some Reducer<State, Action> {
+        Reduce { state, action in
+            switch action {
+            case .onAppear:
+                state.identifiedArrayOfChildrens = IdentifiedArrayOf(uniqueElements: state.children)
+                return .none
+            case let .didTapItem(id):
+                log(.debug, "did tap item: \(id)")
+                if state.isPossibleToExpand {
+                    state.isExpanded = !state.isExpanded
+                } else {
+                    state.isSelected = !state.isSelected
+                }
+                return .send(.delegate(.didTapItem(.init(id: id, isExpand: state.isPossibleToExpand))))
+            case let .children(.element(id: _, action: .delegate(.didTapItem(id, isExpand)))):
+                return .send(.delegate(.didTapItem(.init(id: id, isExpand: isExpand))))
+            case .children:
+                return .none
+            case .delegate:
+                return .none
+            }
+        }
+        .forEach(\.identifiedArrayOfChildrens, action: \.children) {
+            MenuItemFeature()
+        }
+    }
+}
+
+extension MenuItemFeature {
+    @CasePathable
+    public enum Delegate: Sendable, Equatable {
+        case didTapItem(MenuItemTapModel)
+    }
+}
+
+public struct MenuItemTapModel: Sendable, Equatable {
+    public let id: String
+    public let isExpand: Bool
 }
