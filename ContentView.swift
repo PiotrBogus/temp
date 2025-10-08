@@ -1,23 +1,123 @@
-import AppCompositionDomain
-import Foundation
+import XCTest
+@testable import YourModuleName // 🔹 zamień na nazwę swojego modułu
 
-public struct TreeStructureBuilder<Result: TreeItemResult, Item: TreeItem> {
-    private let itemMapper: (Item) -> Result
+// MARK: - Mock types for testing
 
-    public init(itemMapper: @escaping (Item) -> Result) {
-        self.itemMapper = itemMapper
-    }
+private struct MockItem: TreeItem, Equatable {
+    let id: String
+    let parentId: String?
+}
 
-    public func buildTree(_ flatItems: [Item], parentId: String? = nil) -> [Result] {
-        var result = flatItems
-            .filter { $0.parentId == parentId }
-            .map { itemMapper($0) }
+private struct MockResult: TreeItemResult, Equatable {
+    var id: String
+    var parentId: String?
+    var children: [MockResult] = []
+}
 
-        result.indices.forEach { index in
-            let children = buildTree(flatItems, parentId: result[index].id)
-            result[index].children = children
+// MARK: - Tests
+
+final class TreeStructureBuilderTests: XCTestCase {
+
+    func testBuildTree_CreatesCorrectHierarchy() {
+        // Given
+        let items: [MockItem] = [
+            .init(id: "1", parentId: nil),
+            .init(id: "2", parentId: "1"),
+            .init(id: "3", parentId: "1"),
+            .init(id: "4", parentId: "2")
+        ]
+
+        let builder = TreeStructureBuilder<MockResult, MockItem> { item in
+            MockResult(id: item.id, parentId: item.parentId, children: [])
         }
 
-        return result
+        // When
+        let tree = builder.buildTree(items)
+
+        // Then
+        XCTAssertEqual(tree.count, 1)
+        XCTAssertEqual(tree.first?.id, "1")
+        XCTAssertEqual(tree.first?.children.map(\.id), ["2", "3"])
+        XCTAssertEqual(tree.first?.children.first?.children.map(\.id), ["4"])
+    }
+
+    func testBuildTree_EmptyInput_ReturnsEmptyArray() {
+        // Given
+        let builder = TreeStructureBuilder<MockResult, MockItem> { item in
+            MockResult(id: item.id, parentId: item.parentId, children: [])
+        }
+
+        // When
+        let tree = builder.buildTree([])
+
+        // Then
+        XCTAssertTrue(tree.isEmpty)
+    }
+
+    func testBuildTree_HandlesMultipleRootItems() {
+        // Given
+        let items: [MockItem] = [
+            .init(id: "1", parentId: nil),
+            .init(id: "2", parentId: nil),
+            .init(id: "3", parentId: "1"),
+            .init(id: "4", parentId: "2")
+        ]
+
+        let builder = TreeStructureBuilder<MockResult, MockItem> { item in
+            MockResult(id: item.id, parentId: item.parentId, children: [])
+        }
+
+        // When
+        let tree = builder.buildTree(items)
+
+        // Then
+        XCTAssertEqual(tree.map(\.id), ["1", "2"])
+        XCTAssertEqual(tree[0].children.map(\.id), ["3"])
+        XCTAssertEqual(tree[1].children.map(\.id), ["4"])
+    }
+
+    func testBuildTree_HandlesUnorderedInput() {
+        // Given
+        let items: [MockItem] = [
+            .init(id: "3", parentId: "1"),
+            .init(id: "2", parentId: nil),
+            .init(id: "1", parentId: nil),
+            .init(id: "4", parentId: "3")
+        ]
+
+        let builder = TreeStructureBuilder<MockResult, MockItem> { item in
+            MockResult(id: item.id, parentId: item.parentId, children: [])
+        }
+
+        // When
+        let tree = builder.buildTree(items)
+
+        // Then
+        XCTAssertEqual(tree.map(\.id).sorted(), ["1", "2"]) // Dwa korzenie
+        let root1 = tree.first(where: { $0.id == "1" })
+        XCTAssertEqual(root1?.children.map(\.id), ["3"])
+        XCTAssertEqual(root1?.children.first?.children.map(\.id), ["4"])
+    }
+
+    func testBuildTree_DeepHierarchy() {
+        // Given
+        let items: [MockItem] = [
+            .init(id: "1", parentId: nil),
+            .init(id: "2", parentId: "1"),
+            .init(id: "3", parentId: "2"),
+            .init(id: "4", parentId: "3"),
+            .init(id: "5", parentId: "4")
+        ]
+
+        let builder = TreeStructureBuilder<MockResult, MockItem> { item in
+            MockResult(id: item.id, parentId: item.parentId, children: [])
+        }
+
+        // When
+        let tree = builder.buildTree(items)
+
+        // Then
+        XCTAssertEqual(tree.first?.id, "1")
+        XCTAssertEqual(tree.first?.children.first?.children.first?.children.first?.children.first?.id, "5")
     }
 }
