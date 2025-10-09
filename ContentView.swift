@@ -1,143 +1,138 @@
 import XCTest
 import ComposableArchitecture
-import MapKit
-@testable import YourModuleName // ← zamień na właściwy moduł
+@testable import CarPlayParkings
 
 @MainActor
-final class CarPlayActiveTicketReducerTests: XCTestCase {
+final class CarPlayBuyTicketReducerTests: XCTestCase {
 
-    func test_OnAppear_StartsTimer_AndStopsAfterValidTo() async {
-        let clock = TestClock()
-        let now = Date()
-        let validTo = now.addingTimeInterval(2).millisecondsSinceEpoch
-
-        let activeTicket = CarPlayParkingsTicketListItem.mock(validToTimestamp: validTo)
-        let overview = CarPlayParkingsActiveTicketOverviewModel.mock(timeIsUp: false)
-
+    func test_onAppear_loadsData_success() async {
         let store = TestStore(
-            initialState: CarPlayActiveTicketReducer.State(
-                activeTicket: activeTicket,
-                ticket: overview,
-                location: .init(),
-                isTimerRunning: false
-            )
-        ) {
-            CarPlayActiveTicketReducer()
-        } withDependencies: {
-            $0.continuousClock = clock
-            $0.activeTicketReducerClient.stopTicket = { _ in }
-            $0.activeTicketReducerClient.resourceProvider.alertButtonTryAgainText = "Try again"
-            $0.carPlayParkingsErrorParser.getMessage = { _ in "Error" }
-        }
+            initialState: CarPlayBuyTicketReducer.State(),
+            reducer: { CarPlayBuyTicketReducer() },
+            withDependencies: {
+                $0.buyTicketReducerClient = .success
+                $0.carPlayParkingsErrorParser = .mock
+                $0.carPlayResourceProvider = CarPlayParkingsResourcesMock()
+            }
+        )
 
-        await store.send(.onAppear) {
-            $0.isTimerRunning = true
-        }
+        await store.send(.onAppear)
 
-        await clock.advance(by: .seconds(1))
-        await store.receive(.tick)
-
-        await clock.advance(by: .seconds(1))
-        await store.receive(.tick)
-        await store.receive(.onTicketExpired)
-        await store.receive(.stopTimer) {
-            $0.isTimerRunning = false
+        await store.receive({ action in
+            if case .effect(.didLoadData) = action { return true }
+            return false
+        }) {
+            $0.data = .fixture()
+            $0.templateState = .didAppear
         }
     }
 
-    func test_OnStopTicket_SuccessFlow() async {
-        let activeTicket = CarPlayParkingsTicketListItem.mock()
-        let overview = CarPlayParkingsActiveTicketOverviewModel.mock()
-
+    func test_onAppear_loadsData_failure_fallsBackToRefresh() async {
         let store = TestStore(
-            initialState: CarPlayActiveTicketReducer.State(
-                activeTicket: activeTicket,
-                ticket: overview,
-                location: .init(),
-                isTimerRunning: true
+            initialState: CarPlayBuyTicketReducer.State(),
+            reducer: { CarPlayBuyTicketReducer() },
+            withDependencies: {
+                $0.buyTicketReducerClient = .failure
+                $0.carPlayParkingsErrorParser = .mock
+                $0.carPlayResourceProvider = CarPlayParkingsResourcesMock()
+            }
+        )
+
+        await store.send(.onAppear)
+
+        await store.receive({ action in
+            if case .refresh = action { return true }
+            return false
+        }) {
+            $0.templateState = .loading(
+                store.dependencies.buyTicketReducerClient.resourceProvider.loadingSplashText
             )
-        ) {
-            CarPlayActiveTicketReducer()
-        } withDependencies: {
-            $0.activeTicketReducerClient.stopTicket = { _ in } // success
-            $0.activeTicketReducerClient.resourceProvider.alertButtonTryAgainText = "Try again"
-            $0.carPlayParkingsErrorParser.getMessage = { _ in "Error" }
-        }
-
-        await store.send(.onStopTicket) {
-            $0.templateState = .stopTicket
-        }
-
-        await store.receive(.stopTimer) {
-            $0.isTimerRunning = false
-        }
-        await store.receive(.onStopTicketSuccess) {
-            $0.templateState = .entryPoint
         }
     }
 
-    func test_OnStopTicket_FailureFlow() async {
-        enum TestError: Error { case test }
-        let activeTicket = CarPlayParkingsTicketListItem.mock()
-        let overview = CarPlayParkingsActiveTicketOverviewModel.mock()
+    func test_onNextButtonTap_validationFailure() async {
+        let model = CarPlayParkingsNewParkingFormModel.fixture()
+        model.selectedCar = nil
+        model.selectedAccount = nil
+        model.selectedTimeOption = nil
+        model.selectedSubarea = nil
 
         let store = TestStore(
-            initialState: CarPlayActiveTicketReducer.State(
-                activeTicket: activeTicket,
-                ticket: overview,
-                location: .init(),
-                isTimerRunning: false
-            )
-        ) {
-            CarPlayActiveTicketReducer()
-        } withDependencies: {
-            $0.activeTicketReducerClient.stopTicket = { _ in throw TestError.test }
-            $0.carPlayParkingsErrorParser.getMessage = { _ in "Błąd zatrzymania" }
-            $0.activeTicketReducerClient.resourceProvider.alertButtonTryAgainText = "Spróbuj ponownie"
-        }
+            initialState: CarPlayBuyTicketReducer.State(data: model),
+            reducer: { CarPlayBuyTicketReducer() },
+            withDependencies: {
+                $0.buyTicketReducerClient = .success
+                $0.carPlayParkingsErrorParser = .mock
+                $0.carPlayResourceProvider = CarPlayParkingsResourcesMock()
+            }
+        )
 
-        await store.send(.onStopTicket) {
-            $0.templateState = .stopTicket
-        }
+        await store.send(.template(.onNextButtonTap))
 
-        await store.receive(.onStopTicketFail("Błąd zatrzymania")) {
-            $0.templateState = .error(.init(
-                type: .stopParkingError,
-                title: "Błąd zatrzymania",
-                description: nil,
-                buttonTitle: "Spróbuj ponownie"
-            ))
+        await store.receive({ action in
+            if case .effect(.onValidationFormError) = action { return true }
+            return false
+        }) {
+            $0.templateState = .validationError(UUID(), [.carNotSelected, .areaNotSelected, .timeOptionNotSelected, .accountNotSelected])
         }
     }
 
-    func test_OnTryAgain_RepeatsStopFlow() async {
-        let activeTicket = CarPlayParkingsTicketListItem.mock()
-        let overview = CarPlayParkingsActiveTicketOverviewModel.mock()
+    func test_onNextButtonTap_validationSuccess_andPreauthSuccess() async {
+        let model = CarPlayParkingsNewParkingFormModel.fixture()
 
         let store = TestStore(
-            initialState: CarPlayActiveTicketReducer.State(
-                activeTicket: activeTicket,
-                ticket: overview,
-                location: .init(),
-                isTimerRunning: false
+            initialState: CarPlayBuyTicketReducer.State(data: model),
+            reducer: { CarPlayBuyTicketReducer() },
+            withDependencies: {
+                $0.buyTicketReducerClient = .success
+                $0.carPlayParkingsErrorParser = .mock
+                $0.carPlayResourceProvider = CarPlayParkingsResourcesMock()
+            }
+        )
+
+        await store.send(.template(.onNextButtonTap))
+
+        await store.receive({ action in
+            if case .effect(.onValidationFormSuccess) = action { return true }
+            return false
+        }) {
+            $0.templateState = .preauthNewParkingProcessingSplash
+        }
+
+        await store.receive({ action in
+            if case .effect(.didPreauthorizeParking) = action { return true }
+            return false
+        }) {
+            $0.destination = .confirmParking(
+                CarPlayConfirmParkingReducer.State(preauthResponse: .fixture, model: model)
             )
-        ) {
-            CarPlayActiveTicketReducer()
-        } withDependencies: {
-            $0.activeTicketReducerClient.stopTicket = { _ in }
-            $0.activeTicketReducerClient.resourceProvider.alertButtonTryAgainText = "Try again"
-            $0.carPlayParkingsErrorParser.getMessage = { _ in "Error" }
         }
+    }
 
-        await store.send(.onTryAgain) {
-            $0.templateState = .stopTicket
-        }
+    func test_onNextButtonTap_validationSuccess_andPreauthFailure() async {
+        let model = CarPlayParkingsNewParkingFormModel.fixture()
 
-        await store.receive(.stopTimer) {
-            $0.isTimerRunning = false
-        }
-        await store.receive(.onStopTicketSuccess) {
-            $0.templateState = .entryPoint
+        let failingClient = CarPlayBuyTicketReducerClient.custom(
+            preauthorizeParking: { _ in throw CarPlayError.missingData }
+        )
+
+        let store = TestStore(
+            initialState: CarPlayBuyTicketReducer.State(data: model),
+            reducer: { CarPlayBuyTicketReducer() },
+            withDependencies: {
+                $0.buyTicketReducerClient = failingClient
+                $0.carPlayParkingsErrorParser = .mock
+                $0.carPlayResourceProvider = CarPlayParkingsResourcesMock()
+            }
+        )
+
+        await store.send(.template(.onNextButtonTap))
+
+        await store.receive({ action in
+            if case .effect(.onValidationFormError) = action { return true }
+            return false
+        }) {
+            $0.templateState = .validationError(UUID(), [.areaNotSelected, .timeOptionNotSelected])
         }
     }
 }
