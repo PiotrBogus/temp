@@ -1,124 +1,143 @@
-import CarPlay
+import XCTest
 import ComposableArchitecture
-import Dependencies
-import ParkingPlaces
+import MapKit
+@testable import YourModuleName // ← zamień na właściwy moduł
 
-@Reducer
-struct CarPlayActiveTicketReducer: Sendable {
-    @ObservableState
-    struct State: Equatable, Sendable {
-        var templateState: TemplateState = .didAppear
-        let activeTicket: CarPlayParkingsTicketListItem
-        let ticket: CarPlayParkingsActiveTicketOverviewModel
-        let location: MKMapItem
-        var isTimerRunning: Bool = false
-    }
+@MainActor
+final class CarPlayActiveTicketReducerTests: XCTestCase {
 
-    enum TemplateState: Equatable {
-        case didAppear
-        case stopTicket
-        case error(CarPlayErrorTemplateModel<CarPlayActiveTicketErrorType>)
-        case entryPoint
-    }
+    func test_OnAppear_StartsTimer_AndStopsAfterValidTo() async {
+        let clock = TestClock()
+        let now = Date()
+        let validTo = now.addingTimeInterval(2).millisecondsSinceEpoch
 
-    enum Action: Sendable, Equatable {
-        case onAppear
-        case stopTimer
-        case onStopTicket
-        case onTicketExpired
-        case onStopTicketSuccess
-        case onStopTicketFail(String)
-        case onTryAgain
-        case tick
-    }
+        let activeTicket = CarPlayParkingsTicketListItem.mock(validToTimestamp: validTo)
+        let overview = CarPlayParkingsActiveTicketOverviewModel.mock(timeIsUp: false)
 
-    private enum CancelID {
-        case timer
-    }
+        let store = TestStore(
+            initialState: CarPlayActiveTicketReducer.State(
+                activeTicket: activeTicket,
+                ticket: overview,
+                location: .init(),
+                isTimerRunning: false
+            )
+        ) {
+            CarPlayActiveTicketReducer()
+        } withDependencies: {
+            $0.continuousClock = clock
+            $0.activeTicketReducerClient.stopTicket = { _ in }
+            $0.activeTicketReducerClient.resourceProvider.alertButtonTryAgainText = "Try again"
+            $0.carPlayParkingsErrorParser.getMessage = { _ in "Error" }
+        }
 
-    @Dependency(\.carPlayParkingsErrorParser) private var errorParser
-    @Dependency(\.activeTicketReducerClient) private var reducerClient
-    @Dependency(\.continuousClock) private var clock
+        await store.send(.onAppear) {
+            $0.isTimerRunning = true
+        }
 
-    var body: some ReducerOf<Self> {
-        Reduce { state, action in
-            switch action {
-            case .onAppear:
-                guard !state.isTimerRunning else { return .none }
-                state.isTimerRunning = true
-                return startTimer(until: state.activeTicket.validToTimestamp)
-            case .stopTimer:
-                state.isTimerRunning = false
-                return .cancel(id: CancelID.timer)
-            case .tick:
-                if state.ticket.timeIsUp() {
-                    return .send(.onTicketExpired)
-                } else {
-                    return .none
-                }
-            case .onStopTicket, .onTryAgain:
-                state.templateState = .stopTicket
-                return stopTicket(ticket: state.activeTicket)
-            case .onStopTicketSuccess, .onTicketExpired:
-                state.templateState = .entryPoint
-                return notifyParkingWidgetAndInitial(activeTicket: state.activeTicket)
-            case let .onStopTicketFail(message):
-                state.templateState = .error(.init(
-                    type: .stopParkingError,
-                    title: message,
-                    description: nil,
-                    buttonTitle: reducerClient.resourceProvider.alertButtonTryAgainText
-                ))
-                return .none
-            }
+        await clock.advance(by: .seconds(1))
+        await store.receive(.tick)
+
+        await clock.advance(by: .seconds(1))
+        await store.receive(.tick)
+        await store.receive(.onTicketExpired)
+        await store.receive(.stopTimer) {
+            $0.isTimerRunning = false
         }
     }
 
-    private func startTimer(until validTo: Int64) -> Effect<Action> {
-        .run { send in
-            let validToDate = Date(timeIntervalSince1970: TimeInterval(validTo) / 1000)
+    func test_OnStopTicket_SuccessFlow() async {
+        let activeTicket = CarPlayParkingsTicketListItem.mock()
+        let overview = CarPlayParkingsActiveTicketOverviewModel.mock()
 
-            for await _ in clock.timer(interval: .seconds(1)) {
-                await send(.tick)
-
-                if Date() >= validToDate {
-                    await send(.onTicketExpired)
-                    await send(.stopTimer)
-                    break
-                }
-            }
+        let store = TestStore(
+            initialState: CarPlayActiveTicketReducer.State(
+                activeTicket: activeTicket,
+                ticket: overview,
+                location: .init(),
+                isTimerRunning: true
+            )
+        ) {
+            CarPlayActiveTicketReducer()
+        } withDependencies: {
+            $0.activeTicketReducerClient.stopTicket = { _ in } // success
+            $0.activeTicketReducerClient.resourceProvider.alertButtonTryAgainText = "Try again"
+            $0.carPlayParkingsErrorParser.getMessage = { _ in "Error" }
         }
-        .cancellable(id: CancelID.timer, cancelInFlight: true)
-    }
 
-    private func stopTicket(ticket: CarPlayParkingsTicketListItem) -> Effect<Action> {
-        .run { send in
-            do {
-                try await reducerClient.stopTicket(ticket)
-                await send(.stopTimer)
-                await send(.onStopTicketSuccess)
-            } catch {
-                let message = errorParser.getMessage(error: error)
-                await send(.onStopTicketFail(message))
-            }
+        await store.send(.onStopTicket) {
+            $0.templateState = .stopTicket
         }
-    }
 
-    private func notifyParkingWidgetAndInitial(activeTicket: CarPlayParkingsTicketListItem) -> Effect<Action> {
-        .run { _ in
-            await MainActor.run {
-                IKOParkingPlacesStopParkingHelper.notifyParkingStopped(activeTicket)
-                NotificationCenter.default.post(
-                    name: Notification.Name(rawValue: kIKOParkingPlacesListRefresh),
-                    object: nil
-                )
-            }
+        await store.receive(.stopTimer) {
+            $0.isTimerRunning = false
+        }
+        await store.receive(.onStopTicketSuccess) {
+            $0.templateState = .entryPoint
         }
     }
-}
 
-private extension Date {
-    var millisecondsSinceEpoch: Int64 {
-        Int64(self.timeIntervalSince1970 * 1000)
+    func test_OnStopTicket_FailureFlow() async {
+        enum TestError: Error { case test }
+        let activeTicket = CarPlayParkingsTicketListItem.mock()
+        let overview = CarPlayParkingsActiveTicketOverviewModel.mock()
+
+        let store = TestStore(
+            initialState: CarPlayActiveTicketReducer.State(
+                activeTicket: activeTicket,
+                ticket: overview,
+                location: .init(),
+                isTimerRunning: false
+            )
+        ) {
+            CarPlayActiveTicketReducer()
+        } withDependencies: {
+            $0.activeTicketReducerClient.stopTicket = { _ in throw TestError.test }
+            $0.carPlayParkingsErrorParser.getMessage = { _ in "Błąd zatrzymania" }
+            $0.activeTicketReducerClient.resourceProvider.alertButtonTryAgainText = "Spróbuj ponownie"
+        }
+
+        await store.send(.onStopTicket) {
+            $0.templateState = .stopTicket
+        }
+
+        await store.receive(.onStopTicketFail("Błąd zatrzymania")) {
+            $0.templateState = .error(.init(
+                type: .stopParkingError,
+                title: "Błąd zatrzymania",
+                description: nil,
+                buttonTitle: "Spróbuj ponownie"
+            ))
+        }
+    }
+
+    func test_OnTryAgain_RepeatsStopFlow() async {
+        let activeTicket = CarPlayParkingsTicketListItem.mock()
+        let overview = CarPlayParkingsActiveTicketOverviewModel.mock()
+
+        let store = TestStore(
+            initialState: CarPlayActiveTicketReducer.State(
+                activeTicket: activeTicket,
+                ticket: overview,
+                location: .init(),
+                isTimerRunning: false
+            )
+        ) {
+            CarPlayActiveTicketReducer()
+        } withDependencies: {
+            $0.activeTicketReducerClient.stopTicket = { _ in }
+            $0.activeTicketReducerClient.resourceProvider.alertButtonTryAgainText = "Try again"
+            $0.carPlayParkingsErrorParser.getMessage = { _ in "Error" }
+        }
+
+        await store.send(.onTryAgain) {
+            $0.templateState = .stopTicket
+        }
+
+        await store.receive(.stopTimer) {
+            $0.isTimerRunning = false
+        }
+        await store.receive(.onStopTicketSuccess) {
+            $0.templateState = .entryPoint
+        }
     }
 }
