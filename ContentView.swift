@@ -1,76 +1,124 @@
-private func startTimer(until validTo: Int64) -> Effect<Action> {
-    .run { send, dependencies in
-        let clock = dependencies.clock
-        let validToDate = Date(timeIntervalSince1970: TimeInterval(validTo) / 1000)
+import CarPlay
+import ComposableArchitecture
+import Dependencies
+import ParkingPlaces
 
-        for await _ in clock.timer(interval: .seconds(1)) {
-            await send(.tick)
+@Reducer
+struct CarPlayActiveTicketReducer: Sendable {
+    @ObservableState
+    struct State: Equatable, Sendable {
+        var templateState: TemplateState = .didAppear
+        let activeTicket: CarPlayParkingsTicketListItem
+        let ticket: CarPlayParkingsActiveTicketOverviewModel
+        let location: MKMapItem
+        var isTimerRunning: Bool = false
+    }
 
-            // Zatrzymaj timer, gdy czas upłynął
-            if Date() >= validToDate {
-                await send(.onTicketExpired)
-                await send(.stopTimer)
-                break
+    enum TemplateState: Equatable {
+        case didAppear
+        case stopTicket
+        case error(CarPlayErrorTemplateModel<CarPlayActiveTicketErrorType>)
+        case entryPoint
+    }
+
+    enum Action: Sendable, Equatable {
+        case onAppear
+        case stopTimer
+        case onStopTicket
+        case onTicketExpired
+        case onStopTicketSuccess
+        case onStopTicketFail(String)
+        case onTryAgain
+        case tick
+    }
+
+    private enum CancelID {
+        case timer
+    }
+
+    @Dependency(\.carPlayParkingsErrorParser) private var errorParser
+    @Dependency(\.activeTicketReducerClient) private var reducerClient
+    @Dependency(\.continuousClock) private var clock
+
+    var body: some ReducerOf<Self> {
+        Reduce { state, action in
+            switch action {
+            case .onAppear:
+                guard !state.isTimerRunning else { return .none }
+                state.isTimerRunning = true
+                return startTimer(until: state.activeTicket.validToTimestamp)
+            case .stopTimer:
+                state.isTimerRunning = false
+                return .cancel(id: CancelID.timer)
+            case .tick:
+                if state.ticket.timeIsUp() {
+                    return .send(.onTicketExpired)
+                } else {
+                    return .none
+                }
+            case .onStopTicket, .onTryAgain:
+                state.templateState = .stopTicket
+                return stopTicket(ticket: state.activeTicket)
+            case .onStopTicketSuccess, .onTicketExpired:
+                state.templateState = .entryPoint
+                return notifyParkingWidgetAndInitial(activeTicket: state.activeTicket)
+            case let .onStopTicketFail(message):
+                state.templateState = .error(.init(
+                    type: .stopParkingError,
+                    title: message,
+                    description: nil,
+                    buttonTitle: reducerClient.resourceProvider.alertButtonTryAgainText
+                ))
+                return .none
             }
         }
     }
-    .cancellable(id: CancelID.timer, cancelInFlight: true)
+
+    private func startTimer(until validTo: Int64) -> Effect<Action> {
+        .run { send in
+            let validToDate = Date(timeIntervalSince1970: TimeInterval(validTo) / 1000)
+
+            for await _ in clock.timer(interval: .seconds(1)) {
+                await send(.tick)
+
+                if Date() >= validToDate {
+                    await send(.onTicketExpired)
+                    await send(.stopTimer)
+                    break
+                }
+            }
+        }
+        .cancellable(id: CancelID.timer, cancelInFlight: true)
+    }
+
+    private func stopTicket(ticket: CarPlayParkingsTicketListItem) -> Effect<Action> {
+        .run { send in
+            do {
+                try await reducerClient.stopTicket(ticket)
+                await send(.stopTimer)
+                await send(.onStopTicketSuccess)
+            } catch {
+                let message = errorParser.getMessage(error: error)
+                await send(.onStopTicketFail(message))
+            }
+        }
+    }
+
+    private func notifyParkingWidgetAndInitial(activeTicket: CarPlayParkingsTicketListItem) -> Effect<Action> {
+        .run { _ in
+            await MainActor.run {
+                IKOParkingPlacesStopParkingHelper.notifyParkingStopped(activeTicket)
+                NotificationCenter.default.post(
+                    name: Notification.Name(rawValue: kIKOParkingPlacesListRefresh),
+                    object: nil
+                )
+            }
+        }
+    }
 }
 
-
-import XCTest
-import ComposableArchitecture
-@testable import YourModuleName // ← Zamień na właściwy moduł
-
-@MainActor
-final class CarPlayActiveTicketReducerTests: XCTestCase {
-
-    func testTimerStopsAfterValidTo() async {
-        // 1️⃣ Przygotowanie zegara testowego
-        let clock = TestClock()
-
-        // 2️⃣ Stworzenie przykładowych danych
-        let now = Date()
-        let validTo = now.addingTimeInterval(3).millisecondsSinceEpoch // timer ma działać 3 sekundy
-
-        let ticket = CarPlayParkingsActiveTicketOverviewModel.mock
-        let listItem = CarPlayParkingsTicketListItem.mock
-
-        let store = TestStore(
-            initialState: CarPlayActiveTicketReducer.State(
-                activeTicket: listItem,
-                ticket: ticket,
-                location: .init(),
-                isTimerRunning: false
-            )
-        ) {
-            CarPlayActiveTicketReducer()
-        } withDependencies: {
-            $0.continuousClock = clock
-            $0.carPlayParkingsErrorParser.getMessage = { _ in "Error" }
-            $0.activeTicketReducerClient.stopTicket = { _ in }
-            $0.activeTicketReducerClient.resourceProvider.alertButtonTryAgainText = "Try again"
-        }
-
-        // 3️⃣ Uruchamiamy timer
-        await store.send(.onAppear) {
-            $0.isTimerRunning = true
-        }
-
-        // 4️⃣ Zegar przesuwa się o 1s → tick
-        await clock.advance(by: .seconds(1))
-        await store.receive(.tick)
-
-        // 5️⃣ Kolejna sekunda → tick
-        await clock.advance(by: .seconds(1))
-        await store.receive(.tick)
-
-        // 6️⃣ Kolejna sekunda (3s) → tick, a potem timer się kończy
-        await clock.advance(by: .seconds(1))
-        await store.receive(.tick)
-        await store.receive(.onTicketExpired)
-        await store.receive(.stopTimer) {
-            $0.isTimerRunning = false
-        }
+private extension Date {
+    var millisecondsSinceEpoch: Int64 {
+        Int64(self.timeIntervalSince1970 * 1000)
     }
 }
