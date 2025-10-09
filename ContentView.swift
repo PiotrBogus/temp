@@ -1,123 +1,116 @@
-import XCTest
-@testable import YourModuleName // 🔹 zamień na nazwę swojego modułu
+import CarPlay
+import ComposableArchitecture
+import Dependencies
+import ParkingPlaces
 
-// MARK: - Mock types for testing
+@Reducer
+struct CarPlayActiveTicketReducer: Sendable {
+    @ObservableState
+    struct State: Equatable, Sendable {
+        var templateState: TemplateState = .didAppear
+        let activeTicket: CarPlayParkingsTicketListItem
+        let ticket: CarPlayParkingsActiveTicketOverviewModel
+        let location: MKMapItem
+        var isTimerRunning: Bool = false
+    }
 
-private struct MockItem: TreeItem, Equatable {
-    let id: String
-    let parentId: String?
+    enum TemplateState: Equatable {
+        case didAppear
+        case stopTicket
+        case error(CarPlayErrorTemplateModel<CarPlayActiveTicketErrorType>)
+        case entryPoint
+    }
+
+    enum Action: Sendable, Equatable {
+        case onAppear
+        case stopTimer
+        case onStopTicket
+        case onTicketExpired
+        case onStopTicketSuccess
+        case onStopTicketFail(String)
+        case onTryAgain
+        case tick
+    }
+
+    private enum CancelID {
+        case timer
+    }
+
+    @Dependency(\.carPlayParkingsErrorParser) private var errorParser
+    @Dependency(\.activeTicketReducerClient) private var reducerClient
+    @Dependency(\.continuousClock) private var clock
+
+    var body: some ReducerOf<Self> {
+        Reduce { state, action in
+            switch action {
+            case .onAppear:
+                guard !state.isTimerRunning else { return .none }
+                state.isTimerRunning = true
+                return startTimer(until: state.activeTicket.validToTimestamp)
+            case .stopTimer:
+                state.isTimerRunning = false
+                return .cancel(id: CancelID.timer)
+            case .tick:
+                if state.ticket.timeIsUp() {
+                    return .send(.onTicketExpired)
+                } else {
+                    return .none
+                }
+            case .onStopTicket, .onTryAgain:
+                state.templateState = .stopTicket
+                return stopTicket(ticket: state.activeTicket)
+            case .onStopTicketSuccess, .onTicketExpired:
+                state.templateState = .entryPoint
+                return notifyParkingWidgetAndInitial(activeTicket: state.activeTicket)
+            case let .onStopTicketFail(message):
+                state.templateState = .error(.init(
+                    type: .stopParkingError,
+                    title: message,
+                    description: nil,
+                    buttonTitle: reducerClient.resourceProvider.alertButtonTryAgainText
+                ))
+                return .none
+            }
+        }
+    }
+
+    private func startTimer(until validTo: Int64) -> Effect<Action> {
+        .run { send in
+            for await _ in clock.timer(interval: .seconds(1)) {
+                await send(.tick)
+            }
+        }
+        .cancellable(id: CancelID.timer, cancelInFlight: true)
+    }
+
+    private func stopTicket(ticket: CarPlayParkingsTicketListItem) -> Effect<Action> {
+        .run { send in
+            do {
+                try await reducerClient.stopTicket(ticket)
+                await send(.stopTimer)
+                await send(.onStopTicketSuccess)
+            } catch {
+                let message = errorParser.getMessage(error: error)
+                await send(.onStopTicketFail(message))
+            }
+        }
+    }
+
+    private func notifyParkingWidgetAndInitial(activeTicket: CarPlayParkingsTicketListItem) -> Effect<Action> {
+        .run { _ in
+            await MainActor.run {
+                IKOParkingPlacesStopParkingHelper.notifyParkingStopped(activeTicket)
+                NotificationCenter.default.post(
+                    name: Notification.Name(rawValue: kIKOParkingPlacesListRefresh),
+                    object: nil
+                )
+            }
+        }
+    }
 }
 
-private struct MockResult: TreeItemResult, Equatable {
-    var id: String
-    var parentId: String?
-    var children: [MockResult] = []
-}
-
-// MARK: - Tests
-
-final class TreeStructureBuilderTests: XCTestCase {
-
-    func testBuildTree_CreatesCorrectHierarchy() {
-        // Given
-        let items: [MockItem] = [
-            .init(id: "1", parentId: nil),
-            .init(id: "2", parentId: "1"),
-            .init(id: "3", parentId: "1"),
-            .init(id: "4", parentId: "2")
-        ]
-
-        let builder = TreeStructureBuilder<MockResult, MockItem> { item in
-            MockResult(id: item.id, parentId: item.parentId, children: [])
-        }
-
-        // When
-        let tree = builder.buildTree(items)
-
-        // Then
-        XCTAssertEqual(tree.count, 1)
-        XCTAssertEqual(tree.first?.id, "1")
-        XCTAssertEqual(tree.first?.children.map(\.id), ["2", "3"])
-        XCTAssertEqual(tree.first?.children.first?.children.map(\.id), ["4"])
-    }
-
-    func testBuildTree_EmptyInput_ReturnsEmptyArray() {
-        // Given
-        let builder = TreeStructureBuilder<MockResult, MockItem> { item in
-            MockResult(id: item.id, parentId: item.parentId, children: [])
-        }
-
-        // When
-        let tree = builder.buildTree([])
-
-        // Then
-        XCTAssertTrue(tree.isEmpty)
-    }
-
-    func testBuildTree_HandlesMultipleRootItems() {
-        // Given
-        let items: [MockItem] = [
-            .init(id: "1", parentId: nil),
-            .init(id: "2", parentId: nil),
-            .init(id: "3", parentId: "1"),
-            .init(id: "4", parentId: "2")
-        ]
-
-        let builder = TreeStructureBuilder<MockResult, MockItem> { item in
-            MockResult(id: item.id, parentId: item.parentId, children: [])
-        }
-
-        // When
-        let tree = builder.buildTree(items)
-
-        // Then
-        XCTAssertEqual(tree.map(\.id), ["1", "2"])
-        XCTAssertEqual(tree[0].children.map(\.id), ["3"])
-        XCTAssertEqual(tree[1].children.map(\.id), ["4"])
-    }
-
-    func testBuildTree_HandlesUnorderedInput() {
-        // Given
-        let items: [MockItem] = [
-            .init(id: "3", parentId: "1"),
-            .init(id: "2", parentId: nil),
-            .init(id: "1", parentId: nil),
-            .init(id: "4", parentId: "3")
-        ]
-
-        let builder = TreeStructureBuilder<MockResult, MockItem> { item in
-            MockResult(id: item.id, parentId: item.parentId, children: [])
-        }
-
-        // When
-        let tree = builder.buildTree(items)
-
-        // Then
-        XCTAssertEqual(tree.map(\.id).sorted(), ["1", "2"]) // Dwa korzenie
-        let root1 = tree.first(where: { $0.id == "1" })
-        XCTAssertEqual(root1?.children.map(\.id), ["3"])
-        XCTAssertEqual(root1?.children.first?.children.map(\.id), ["4"])
-    }
-
-    func testBuildTree_DeepHierarchy() {
-        // Given
-        let items: [MockItem] = [
-            .init(id: "1", parentId: nil),
-            .init(id: "2", parentId: "1"),
-            .init(id: "3", parentId: "2"),
-            .init(id: "4", parentId: "3"),
-            .init(id: "5", parentId: "4")
-        ]
-
-        let builder = TreeStructureBuilder<MockResult, MockItem> { item in
-            MockResult(id: item.id, parentId: item.parentId, children: [])
-        }
-
-        // When
-        let tree = builder.buildTree(items)
-
-        // Then
-        XCTAssertEqual(tree.first?.id, "1")
-        XCTAssertEqual(tree.first?.children.first?.children.first?.children.first?.children.first?.id, "5")
+private extension Date {
+    var millisecondsSinceEpoch: Int64 {
+        Int64(self.timeIntervalSince1970 * 1000)
     }
 }
