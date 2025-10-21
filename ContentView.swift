@@ -1,39 +1,45 @@
-import CarPlay
+import XCTest
 import ComposableArchitecture
-import Dependencies
+@testable import YourModuleName // <-- podmień na nazwę modułu z reducerem
 
-@Reducer
-struct CarPlayAccountSelectionReducer: Sendable {
-    @ObservableState
-    struct State: Equatable, Sendable {
-        var templateState: TemplateState = .willAppear
-        var accounts: [CarPlayParkingsAccount] = []
-    }
+final class CarPlayAccountSelectionReducerTests: XCTestCase {
+    @MainActor
+    func test_onInformationNavigationButtonTap_changesTemplateStateToInformation() async {
+        // Given
+        let store = TestStore(initialState: CarPlayAccountSelectionReducer.State()) {
+            CarPlayAccountSelectionReducer()
+        } withDependencies: {
+            $0.carPlayLogger = .noop // mock logger
+        }
 
-    enum TemplateState: Equatable {
-        case willAppear
-        case didAppear
-        case information(UUID)
-    }
-
-    enum Action: Sendable, Equatable {
-        case onInformationNavigationButtonTap
-        case onInformationOkButtonTap
-    }
-
-    @Dependency(\.carPlayLogger) var logger
-
-    var body: some ReducerOf<Self> {
-        Reduce { state, action in
-            logger.log("\(String(describing: #function)) action: \(String(describing: action))", nil, String(describing: Self.self))
-            switch action {
-            case .onInformationNavigationButtonTap:
-                state.templateState = .information(UUID())
-                return .none
-            case .onInformationOkButtonTap:
-                state.templateState = .didAppear
-                return .none
+        // When
+        await store.send(.onInformationNavigationButtonTap) {
+            // Then
+            // stan przechodzi na .information(UUID)
+            // nie możemy porównać UUID dokładnie, więc tylko sprawdzamy typ
+            if case .information = $0.templateState {
+                // OK
+            } else {
+                XCTFail("Expected templateState to be .information")
             }
+        }
+    }
+
+    @MainActor
+    func test_onInformationOkButtonTap_changesTemplateStateToDidAppear() async {
+        // Given
+        let store = TestStore(initialState: CarPlayAccountSelectionReducer.State(
+            templateState: .information(UUID())
+        )) {
+            CarPlayAccountSelectionReducer()
+        } withDependencies: {
+            $0.carPlayLogger = .noop
+        }
+
+        // When
+        await store.send(.onInformationOkButtonTap) {
+            // Then
+            $0.templateState = .didAppear
         }
     }
 }
