@@ -1,40 +1,68 @@
-import CarPlay
+import XCTest
 import ComposableArchitecture
-import Dependencies
+@testable import YourModuleName // <- zamień na nazwę modułu, w którym jest reducer
 
-@Reducer
-struct CarPlayCarSelectionReducer: Sendable {
-    @ObservableState
-    struct State: Equatable, Sendable {
-        var templateState: TemplateState = .willAppear
+@MainActor
+final class CarPlayCarSelectionReducerTests: XCTestCase {
 
-        var cars: [CarPlayParkingsCarListItem] = []
-    }
+    func test_onInformationNavigationButtonTap_changesStateToInformation() async {
+        // Given
+        let store = TestStore(initialState: CarPlayCarSelectionReducer.State()) {
+            CarPlayCarSelectionReducer()
+        } withDependencies: {
+            $0.carPlayLogger = .noop // zdefiniowany mock logger
+        }
 
-    enum TemplateState: Equatable {
-        case willAppear
-        case didAppear
-        case information(UUID)
-    }
-
-    enum Action: Sendable, Equatable {
-        case onInformationNavigationButtonTap
-        case onInformationOkButtonTap
-    }
-
-    @Dependency(\.carPlayLogger) var logger
-
-    var body: some ReducerOf<Self> {
-        Reduce { state, action in
-            logger.log("\(String(describing: #function)) action: \(String(describing: action))", nil, String(describing: Self.self))
-            switch action {
-            case .onInformationNavigationButtonTap:
-                state.templateState = .information(UUID())
-                return .none
-            case .onInformationOkButtonTap:
-                state.templateState = .didAppear
-                return .none
+        // When
+        await store.send(.onInformationNavigationButtonTap) {
+            // Then
+            // Sprawdź tylko, że stan zmienia się na .information(UUID)
+            if case .information = $0.templateState {
+                // OK
+            } else {
+                XCTFail("Expected .information, got \($0.templateState)")
             }
         }
+    }
+
+    func test_onInformationOkButtonTap_changesStateToDidAppear() async {
+        // Given
+        let store = TestStore(initialState: CarPlayCarSelectionReducer.State(
+            templateState: .information(UUID())
+        )) {
+            CarPlayCarSelectionReducer()
+        } withDependencies: {
+            $0.carPlayLogger = .noop
+        }
+
+        // When
+        await store.send(.onInformationOkButtonTap) {
+            // Then
+            $0.templateState = .didAppear
+        }
+    }
+
+    func test_logger_isCalledForEachAction() async {
+        // Given
+        var loggedMessages: [String] = []
+
+        let logger = CarPlayLogger { message, _, _ in
+            loggedMessages.append(message)
+        }
+
+        let store = TestStore(initialState: CarPlayCarSelectionReducer.State()) {
+            CarPlayCarSelectionReducer()
+        } withDependencies: {
+            $0.carPlayLogger = logger
+        }
+
+        // When
+        await store.send(.onInformationNavigationButtonTap)
+        await store.send(.onInformationOkButtonTap)
+
+        // Then
+        XCTAssertEqual(loggedMessages.count, 2)
+        XCTAssertTrue(loggedMessages.contains { $0.contains("onInformationNavigationButtonTap") })
+        XCTAssertTrue(loggedMessages.contains { $0.contains("onInformationOkButtonTap") })
     }
 }
