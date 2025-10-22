@@ -1,68 +1,85 @@
-import XCTest
-import ComposableArchitecture
-@testable import YourModuleName // <- zamień na nazwę modułu, w którym jest reducer
 
-@MainActor
-final class CarPlayCarSelectionReducerTests: XCTestCase {
+    private static let mockResponseJsonString = """
+       [
+         {
+           "id": 100,
+           "title": "Core Financials"
+         },
+         {
+           "id": 100100,
+           "parentId": 100,
+           "title": "Daily Sales"
+         },
+         {
+           "id": 100200,
+           "parentId": 100,
+           "title": "Sales"
+         },
+         {
+           "id": 100300,
+           "parentId": 100,
+           "title": "Profit"
+         },
+         {
+           "id": 100400,
+           "parentId": 100,
+           "title": "PVM"
+         },
+         {
+           "id": 100500,
+           "parentId": 100,
+           "title": "Total Functional Costs"
+         },
+         {
+           "id": 100600,
+           "parentId": 100,
+           "title": "YTD / YTG"
+         },
+         {
+           "id": 200,
+           "title": "Business Insights"
+         },
+         {
+           "id": 200100,
+           "parentId": 200,
+           "title": "Market Tracker"
+         },     
+         {
+           "id": 200200,
+           "parentId": 200,
+           "title": "Performance Tracker INTL"
+         },
+         {
+           "id": "200300",
+           "parentId": "200",
+           "title": "Field Force Engagement"
+         },
+         {
+           "id": 200400,
+           "parentId": 200,
+           "title": "Tactical RA"
+         },
+         {
+           "id": 200500,
+           "parentId": 200,
+           "title": "US Stock in Trade"
+         },
+         {
+           "id": 200600,
+           "parentId": 200,
+           "title": "IQVIA Company Ranking"
+         }
+       ]
+    """
+}
 
-    func test_onInformationNavigationButtonTap_changesStateToInformation() async {
-        // Given
-        let store = TestStore(initialState: CarPlayCarSelectionReducer.State()) {
-            CarPlayCarSelectionReducer()
-        } withDependencies: {
-            $0.carPlayLogger = .noop // zdefiniowany mock logger
-        }
 
-        // When
-        await store.send(.onInformationNavigationButtonTap) {
-            // Then
-            // Sprawdź tylko, że stan zmienia się na .information(UUID)
-            if case .information = $0.templateState {
-                // OK
-            } else {
-                XCTFail("Expected .information, got \($0.templateState)")
-            }
-        }
-    }
+import AppCompositionDomain
+import Foundation
 
-    func test_onInformationOkButtonTap_changesStateToDidAppear() async {
-        // Given
-        let store = TestStore(initialState: CarPlayCarSelectionReducer.State(
-            templateState: .information(UUID())
-        )) {
-            CarPlayCarSelectionReducer()
-        } withDependencies: {
-            $0.carPlayLogger = .noop
-        }
-
-        // When
-        await store.send(.onInformationOkButtonTap) {
-            // Then
-            $0.templateState = .didAppear
-        }
-    }
-
-    func test_logger_isCalledForEachAction() async {
-        // Given
-        var loggedMessages: [String] = []
-
-        let logger = CarPlayLogger { message, _, _ in
-            loggedMessages.append(message)
-        }
-
-        let store = TestStore(initialState: CarPlayCarSelectionReducer.State()) {
-            CarPlayCarSelectionReducer()
-        } withDependencies: {
-            $0.carPlayLogger = logger
-        }
-
-        // When
-        await store.send(.onInformationNavigationButtonTap)
-        await store.send(.onInformationOkButtonTap)
-
-        // Then
-        XCTAssertEqual(loggedMessages.count, 2)
-        XCTAssertTrue(loggedMessages.contains { $0.contains("onInformationNavigationButtonTap") })
-        XCTAssertTrue(loggedMessages.contains { $0.contains("onInformationOkButtonTap") })
-    }
+public struct MenuItemDto: TreeItem, Sendable, Equatable, Decodable {
+    public let id: Int
+    public let title: String
+    public let parentId: Int?
+    public let externalKPIURL: String?
 }
