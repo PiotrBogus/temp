@@ -1,3 +1,38 @@
+import AppCompositionDomain
+import Dependencies
+import Foundation
+import GenieApi
+
+public struct MenuRepositoryImpl: MenuRepository {
+    @Dependency(\.apiClient) var apiClient
+
+    public func loadMenu() async throws -> [MenuItemDto] {
+        do {
+//            return try MenuRepositoryImpl.prepareMock()
+            let menu = try await apiClient.menuV1().ok.body
+            switch menu {
+            case .json(let items):
+                return items.map {
+                    MenuItemDto(
+                        id: $0.id,
+                        title: $0.title,
+                        parentId: $0.parentId,
+                        externalKPIURL: $0.externalKPIURL
+                    )
+                 }
+//            }
+        } catch {
+            print(error)
+            throw error
+        }
+    }
+}
+
+private extension MenuRepositoryImpl {
+    private static func prepareMock() throws -> [MenuItemDto] {
+        let data = Self.mockResponseJsonString.data(using: .utf8)!
+        return try JSONDecoder().decode([MenuItemDto].self, from: data)
+    }
 
     private static let mockResponseJsonString = """
        [
@@ -50,8 +85,8 @@
            "title": "Performance Tracker INTL"
          },
          {
-           "id": "200300",
-           "parentId": "200",
+           "id": 200300,
+           "parentId": 200,
            "title": "Field Force Engagement"
          },
          {
@@ -71,15 +106,4 @@
          }
        ]
     """
-}
-
-
-import AppCompositionDomain
-import Foundation
-
-public struct MenuItemDto: TreeItem, Sendable, Equatable, Decodable {
-    public let id: Int
-    public let title: String
-    public let parentId: Int?
-    public let externalKPIURL: String?
 }
