@@ -1,109 +1,80 @@
-import AppCompositionDomain
+import XCTest
 import Dependencies
-import Foundation
-import GenieApi
+@testable import AppCompositionDomain
+@testable import GenieApi // jeśli typy są z tego modułu
 
-public struct MenuRepositoryImpl: MenuRepository {
-    @Dependency(\.apiClient) var apiClient
+final class MenuRepositoryImplTests: XCTestCase {
 
-    public func loadMenu() async throws -> [MenuItemDto] {
+    struct MockApiClient {
+        var menuHandler: @Sendable () async throws -> GenieApi.MenuV1Response
+    }
+
+    func test_loadMenu_returnsDecodedItems() async throws {
+        // Given
+        let mockItems: [MenuItemDto] = [
+            MenuItemDto(id: 1, title: "Test Root", parentId: nil, externalKPIURL: nil),
+            MenuItemDto(id: 2, title: "Child", parentId: 1, externalKPIURL: "https://example.com/kpi/2")
+        ]
+
+        // Stwórz mock API zwracający identyczną strukturę jak `apiClient.menuV1().ok.body`
+        let mockApiClient = ApiClient(
+            menuV1: {
+                .ok(.json(mockItems))
+            }
+        )
+
+        let repository = withDependencies {
+            $0.apiClient = mockApiClient
+        } operation: {
+            MenuRepositoryImpl()
+        }
+
+        // When
+        let result = try await repository.loadMenu()
+
+        // Then
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result.first?.title, "Test Root")
+        XCTAssertEqual(result.last?.externalKPIURL, "https://example.com/kpi/2")
+    }
+
+    func test_loadMenu_throwsOnError() async {
+        // Given
+        enum DummyError: Error { case network }
+
+        let mockApiClient = ApiClient(
+            menuV1: {
+                throw DummyError.network
+            }
+        )
+
+        let repository = withDependencies {
+            $0.apiClient = mockApiClient
+        } operation: {
+            MenuRepositoryImpl()
+        }
+
+        // When / Then
         do {
-//            return try MenuRepositoryImpl.prepareMock()
-            let menu = try await apiClient.menuV1().ok.body
-            switch menu {
-            case .json(let items):
-                return items.map {
-                    MenuItemDto(
-                        id: $0.id,
-                        title: $0.title,
-                        parentId: $0.parentId,
-                        externalKPIURL: $0.externalKPIURL
-                    )
-                 }
-//            }
+            _ = try await repository.loadMenu()
+            XCTFail("Expected error to be thrown")
         } catch {
-            print(error)
-            throw error
+            guard case DummyError.network = error else {
+                return XCTFail("Unexpected error type: \(error)")
+            }
         }
     }
 }
 
-private extension MenuRepositoryImpl {
-    private static func prepareMock() throws -> [MenuItemDto] {
-        let data = Self.mockResponseJsonString.data(using: .utf8)!
-        return try JSONDecoder().decode([MenuItemDto].self, from: data)
-    }
 
-    private static let mockResponseJsonString = """
-       [
-         {
-           "id": 100,
-           "title": "Core Financials"
-         },
-         {
-           "id": 100100,
-           "parentId": 100,
-           "title": "Daily Sales"
-         },
-         {
-           "id": 100200,
-           "parentId": 100,
-           "title": "Sales"
-         },
-         {
-           "id": 100300,
-           "parentId": 100,
-           "title": "Profit"
-         },
-         {
-           "id": 100400,
-           "parentId": 100,
-           "title": "PVM"
-         },
-         {
-           "id": 100500,
-           "parentId": 100,
-           "title": "Total Functional Costs"
-         },
-         {
-           "id": 100600,
-           "parentId": 100,
-           "title": "YTD / YTG"
-         },
-         {
-           "id": 200,
-           "title": "Business Insights"
-         },
-         {
-           "id": 200100,
-           "parentId": 200,
-           "title": "Market Tracker"
-         },     
-         {
-           "id": 200200,
-           "parentId": 200,
-           "title": "Performance Tracker INTL"
-         },
-         {
-           "id": 200300,
-           "parentId": 200,
-           "title": "Field Force Engagement"
-         },
-         {
-           "id": 200400,
-           "parentId": 200,
-           "title": "Tactical RA"
-         },
-         {
-           "id": 200500,
-           "parentId": 200,
-           "title": "US Stock in Trade"
-         },
-         {
-           "id": 200600,
-           "parentId": 200,
-           "title": "IQVIA Company Ranking"
-         }
-       ]
-    """
+
+import Dependencies
+import GenieApi
+
+extension ApiClient: TestDependencyKey {
+    public static let testValue = ApiClient(
+        menuV1: { .ok(.json([])) }
+    )
 }
+
+
