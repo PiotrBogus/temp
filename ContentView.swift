@@ -1,24 +1,26 @@
 import Foundation
 import CarPlay
 
-actor CarPlayPresentationQueue: @unchecked Sendable {
-    private var isProcessing = false
-    private var queue: [() async -> Void] = []
+actor CarPlayPresentationQueue: Sendable {
+    static let shared = CarPlayPresentationQueue()
 
-    func enqueue(_ operation: @escaping () async -> Void) {
-        queue.append(operation)
-        if !isProcessing {
-            isProcessing = true
-            Task { await processQueue() }
+    private var operations: [() async -> Void] = []
+    private var isRunning = false
+
+    func enqueue(_ operation: @escaping @Sendable () async -> Void) {
+        operations.append(operation)
+        if !isRunning {
+            isRunning = true
+            Task { await processNext() }
         }
     }
 
-    private func processQueue() async {
-        while !queue.isEmpty {
-            let next = queue.removeFirst()
+    private func processNext() async {
+        while !operations.isEmpty {
+            let next = operations.removeFirst()
             await next()
         }
-        isProcessing = false
+        isRunning = false
     }
 }
 
