@@ -93,3 +93,36 @@ final class CarPlayPresentationQueueTests: XCTestCase {
         XCTAssertEqual(results, ["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"])
     }
 }
+
+
+
+
+
+
+final class CarPlayPresentationQueue: @unchecked Sendable {
+    static let shared = CarPlayPresentationQueue()
+
+    private let queue = DispatchQueue(label: "carplay.presentation.queue", qos: .userInitiated)
+    private var operations: [() async -> Void] = []
+    private var isRunning = false
+
+    func enqueue(_ operation: @escaping @Sendable () async -> Void) {
+        queue.async {
+            self.operations.append(operation)
+            self.runNextIfNeeded()
+        }
+    }
+
+    private func runNextIfNeeded() {
+        guard !isRunning, !operations.isEmpty else { return }
+        isRunning = true
+        let next = operations.removeFirst()
+        Task {
+            await next()
+            queue.async {
+                self.isRunning = false
+                self.runNextIfNeeded()
+            }
+        }
+    }
+}
