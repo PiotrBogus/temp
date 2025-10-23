@@ -1,120 +1,151 @@
 import CarPlay
-import Foundation
+import XCTest
 
-actor CarPlayPresentationQueue: Sendable {
-    static let shared = CarPlayPresentationQueue()
+final class FlexibleMockCPInterfaceController: CPInterfaceController {
+    var presentedTemplateInternal: CPTemplate? = nil
+    override var presentedTemplate: CPTemplate? { presentedTemplateInternal }
 
-    private var operations: [() async -> Void] = []
-    private var isRunning = false
+    var presentedTemplates: [String] = []
+    var pushedTemplates: [String] = []
+    var rootTemplates: [String] = []
+    var dismissedTemplates: [String] = []
 
-    func enqueue(_ operation: @escaping @Sendable () async -> Void) {
-        operations.append(operation)
-        if !isRunning {
-            isRunning = true
-            Task { await processNext() }
-        }
+    var presentExpectation: XCTestExpectation?
+    var pushExpectation: XCTestExpectation?
+    var rootExpectation: XCTestExpectation?
+    var dismissExpectation: XCTestExpectation?
+
+    override func presentTemplate(_ template: CPTemplate, animated: Bool, completion: ((Bool, Error?) -> Void)? = nil) {
+        presentedTemplates.append(template.titleVariants.first ?? "unknown")
+        presentedTemplateInternal = template
+        completion?(true, nil)
+        presentExpectation?.fulfill()
     }
 
-    private func processNext() async {
-        while !operations.isEmpty {
-            let next = operations.removeFirst()
-            await next()
+    override func pushTemplate(_ template: CPTemplate, animated: Bool, completion: ((Bool, Error?) -> Void)? = nil) {
+        pushedTemplates.append(template.titleVariants.first ?? "unknown")
+        completion?(true, nil)
+        pushExpectation?.fulfill()
+    }
+
+    override func setRootTemplate(_ template: CPTemplate, animated: Bool, completion: ((Bool, Error?) -> Void)? = nil) {
+        rootTemplates.append(template.titleVariants.first ?? "unknown")
+        presentedTemplateInternal = template
+        completion?(true, nil)
+        rootExpectation?.fulfill()
+    }
+
+    override func dismissTemplate(animated: Bool, completion: ((Bool, Error?) -> Void)? = nil) {
+        if let current = presentedTemplateInternal {
+            dismissedTemplates.append(current.titleVariants.first ?? "unknown")
         }
-        isRunning = false
+        presentedTemplateInternal = nil
+        completion?(true, nil)
+        dismissExpectation?.fulfill()
     }
 }
 
-extension CPInterfaceController: @unchecked @retroactive Sendable {
-    func enqueueDismissAndPresent(
-        template: CPTemplate,
-        animated: Bool = true
-    ) {
-        Task {
-            await CarPlayPresentationQueue.shared.enqueue { [weak self] in
-                guard let self else { return }
-                await self.dismissAndPresent(template: template, animated: animated)
-            }
-        }
+
+
+
+@MainActor
+final class CarPlayPresentationQueueTests: XCTestCase {
+
+    func testEnqueueDismissAndPresentWhenNoTemplate() {
+        let controller = FlexibleMockCPInterfaceController()
+        let template = CPAlertTemplate(titleVariants: ["First"], actions: [])
+
+        let presentExp = expectation(description: "Present template")
+        controller.presentExpectation = presentExp
+
+        controller.enqueueDismissAndPresent(template: template)
+
+        wait(for: [presentExp], timeout: 1.0)
+        XCTAssertEqual(controller.presentedTemplates, ["First"])
     }
 
-    func enqueueDismissAndPush(
-        template: CPTemplate,
-        animated: Bool = true
-    ) {
-        Task {
-            await CarPlayPresentationQueue.shared.enqueue { [weak self] in
-                guard let self else { return }
-                await self.dismissAndPush(template: template, animated: animated)
-            }
-        }
+    func testEnqueueDismissAndPresentWhenTemplateAlreadyPresented() {
+        let controller = FlexibleMockCPInterfaceController()
+        let initialTemplate = CPAlertTemplate(titleVariants: ["Initial"], actions: [])
+        let newTemplate = CPAlertTemplate(titleVariants: ["New"], actions: [])
+
+        // Ustawiamy początkowy template
+        controller.presentedTemplateInternal = initialTemplate
+
+        // Oczekiwania na dismiss i present
+        let dismissExp = expectation(description: "Dismiss old template")
+        let presentExp = expectation(description: "Present new template")
+        controller.dismissExpectation = dismissExp
+        controller.presentExpectation = presentExp
+
+        controller.enqueueDismissAndPresent(template: newTemplate)
+
+        wait(for: [dismissExp, presentExp], timeout: 1.0)
+
+        XCTAssertEqual(controller.dismissedTemplates, ["Initial"])
+        XCTAssertEqual(controller.presentedTemplates, ["New"])
+        XCTAssertEqual(controller.presentedTemplate?.titleVariants.first, "New")
     }
 
-    func enqueueDismissAndSetAsRoot(
-        template: CPTemplate,
-        animated: Bool = true
-    ) {
-        Task {
-            await CarPlayPresentationQueue.shared.enqueue { [weak self] in
-                guard let self else { return }
-                await self.dismissAndSetAsRoot(template: template, animated: animated)
-            }
-        }
+    func testEnqueueDismissAndPushExecutesInOrder() {
+        let controller = FlexibleMockCPInterfaceController()
+        let template1 = CPAlertTemplate(titleVariants: ["Push1"], actions: [])
+        let template2 = CPAlertTemplate(titleVariants: ["Push2"], actions: [])
+
+        let exp1 = expectation(description: "First push")
+        let exp2 = expectation(description: "Second push")
+        controller.pushExpectation = exp1
+
+        controller.enqueueDismissAndPush(template: template1)
+
+        controller.pushExpectation = exp2
+        controller.enqueueDismissAndPush(template: template2)
+
+        wait(for: [exp1, exp2], timeout: 1.0)
+        XCTAssertEqual(controller.pushedTemplates, ["Push1", "Push2"])
     }
 
-    private func dismissAndPresent(
-        template: CPTemplate,
-        animated: Bool = true
-    ) async {
-        await withCheckedContinuation { continuation in
-            if presentedTemplate != nil {
-                dismissTemplate(animated: false) { [weak self] _, _ in
-                    self?.presentTemplate(template, animated: animated) { _, _ in
-                        continuation.resume()
-                    }
-                }
-            } else {
-                presentTemplate(template, animated: animated) { _, _ in
-                    continuation.resume()
-                }
-            }
-        }
+    func testEnqueueDismissAndSetAsRootExecutesInOrder() {
+        let controller = FlexibleMockCPInterfaceController()
+        let template1 = CPAlertTemplate(titleVariants: ["Root1"], actions: [])
+        let template2 = CPAlertTemplate(titleVariants: ["Root2"], actions: [])
+
+        let exp1 = expectation(description: "First root")
+        let exp2 = expectation(description: "Second root")
+        controller.rootExpectation = exp1
+
+        controller.enqueueDismissAndSetAsRoot(template: template1)
+
+        controller.rootExpectation = exp2
+        controller.enqueueDismissAndSetAsRoot(template: template2)
+
+        wait(for: [exp1, exp2], timeout: 1.0)
+        XCTAssertEqual(controller.rootTemplates, ["Root1", "Root2"])
+        XCTAssertEqual(controller.presentedTemplate?.titleVariants.first, "Root2")
     }
 
-    private func dismissAndPush(
-        template: CPTemplate,
-        animated: Bool = true
-    ) async {
-        await withCheckedContinuation { continuation in
-            if presentedTemplate != nil {
-                dismissTemplate(animated: false) { [weak self] _, _ in
-                    self?.pushTemplate(template, animated: animated) { _, _ in
-                        continuation.resume()
-                    }
-                }
-            } else {
-                pushTemplate(template, animated: animated) { _, _ in
-                    continuation.resume()
-                }
-            }
-        }
-    }
+    func testQueueProcessesMixedOperationsSequentially() {
+        let controller = FlexibleMockCPInterfaceController()
+        let templateA = CPAlertTemplate(titleVariants: ["A"], actions: [])
+        let templateB = CPAlertTemplate(titleVariants: ["B"], actions: [])
+        let templateC = CPAlertTemplate(titleVariants: ["C"], actions: [])
 
-    private func dismissAndSetAsRoot(
-        template: CPTemplate,
-        animated: Bool = true
-    ) async {
-        await withCheckedContinuation { continuation in
-            if presentedTemplate != nil {
-                dismissTemplate(animated: false) { [weak self] _, _ in
-                    self?.setRootTemplate(template, animated: animated) { _, _ in
-                        continuation.resume()
-                    }
-                }
-            } else {
-                setRootTemplate(template, animated: animated) { _, _ in
-                    continuation.resume()
-                }
-            }
-        }
+        let expA = expectation(description: "A presented")
+        let expB = expectation(description: "B pushed")
+        let expC = expectation(description: "C root")
+
+        controller.presentExpectation = expA
+        controller.pushExpectation = expB
+        controller.rootExpectation = expC
+
+        controller.enqueueDismissAndPresent(template: templateA)
+        controller.enqueueDismissAndPush(template: templateB)
+        controller.enqueueDismissAndSetAsRoot(template: templateC)
+
+        wait(for: [expA, expB, expC], timeout: 1.0)
+
+        XCTAssertEqual(controller.presentedTemplates, ["A"])
+        XCTAssertEqual(controller.pushedTemplates, ["B"])
+        XCTAssertEqual(controller.rootTemplates, ["C"])
     }
 }
