@@ -1,5 +1,5 @@
-import Foundation
 import CarPlay
+import Foundation
 
 actor CarPlayPresentationQueue: Sendable {
     static let shared = CarPlayPresentationQueue()
@@ -24,106 +24,96 @@ actor CarPlayPresentationQueue: Sendable {
     }
 }
 
-
-
-
-import XCTest
-@testable import YourModuleName
-
-final class CarPlayPresentationQueueTests: XCTestCase {
-    func testQueueProcessesTasksInOrder() async {
-        let queue = CarPlayPresentationQueue()
-        var results: [String] = []
-        let expectation = XCTestExpectation(description: "All tasks executed in order")
-
-        await queue.enqueue {
-            results.append("first")
+extension CPInterfaceController: @unchecked @retroactive Sendable {
+    func enqueueDismissAndPresent(
+        template: CPTemplate,
+        animated: Bool = true
+    ) {
+        Task {
+            await CarPlayPresentationQueue.shared.enqueue { [weak self] in
+                guard let self else { return }
+                await self.dismissAndPresent(template: template, animated: animated)
+            }
         }
-
-        await queue.enqueue {
-            results.append("second")
-        }
-
-        await queue.enqueue {
-            results.append("third")
-            expectation.fulfill()
-        }
-
-        await fulfillment(of: [expectation], timeout: 1.0)
-        XCTAssertEqual(results, ["first", "second", "third"])
     }
 
-    func testQueueProcessesSequentiallyEvenWithAsyncDelays() async {
-        let queue = CarPlayPresentationQueue()
-        var results: [String] = []
-        let expectation = XCTestExpectation(description: "Sequential processing")
-
-        await queue.enqueue {
-            results.append("A")
-            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2s
-            results.append("A done")
+    func enqueueDismissAndPush(
+        template: CPTemplate,
+        animated: Bool = true
+    ) {
+        Task {
+            await CarPlayPresentationQueue.shared.enqueue { [weak self] in
+                guard let self else { return }
+                await self.dismissAndPush(template: template, animated: animated)
+            }
         }
-
-        await queue.enqueue {
-            results.append("B")
-            results.append("B done")
-            expectation.fulfill()
-        }
-
-        await fulfillment(of: [expectation], timeout: 2.0)
-
-        XCTAssertEqual(results, ["A", "A done", "B", "B done"])
     }
 
-    func testQueueAllowsConcurrentEnqueuesButSerialExecution() async {
-        let queue = CarPlayPresentationQueue()
-        var results: [String] = []
-        let expectation = XCTestExpectation(description: "All tasks executed serially")
+    func enqueueDismissAndSetAsRoot(
+        template: CPTemplate,
+        animated: Bool = true
+    ) {
+        Task {
+            await CarPlayPresentationQueue.shared.enqueue { [weak self] in
+                guard let self else { return }
+                await self.dismissAndSetAsRoot(template: template, animated: animated)
+            }
+        }
+    }
 
-        await withTaskGroup(of: Void.self) { group in
-            for i in 1...5 {
-                group.addTask {
-                    await queue.enqueue {
-                        results.append("Task \(i)")
-                        if i == 5 { expectation.fulfill() }
+    private func dismissAndPresent(
+        template: CPTemplate,
+        animated: Bool = true
+    ) async {
+        await withCheckedContinuation { continuation in
+            if presentedTemplate != nil {
+                dismissTemplate(animated: false) { [weak self] _, _ in
+                    self?.presentTemplate(template, animated: animated) { _, _ in
+                        continuation.resume()
                     }
+                }
+            } else {
+                presentTemplate(template, animated: animated) { _, _ in
+                    continuation.resume()
                 }
             }
         }
-
-        await fulfillment(of: [expectation], timeout: 1.0)
-        XCTAssertEqual(results, ["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"])
     }
-}
 
-
-
-
-
-
-final class CarPlayPresentationQueue: @unchecked Sendable {
-    static let shared = CarPlayPresentationQueue()
-
-    private let queue = DispatchQueue(label: "carplay.presentation.queue", qos: .userInitiated)
-    private var operations: [() async -> Void] = []
-    private var isRunning = false
-
-    func enqueue(_ operation: @escaping @Sendable () async -> Void) {
-        queue.async {
-            self.operations.append(operation)
-            self.runNextIfNeeded()
+    private func dismissAndPush(
+        template: CPTemplate,
+        animated: Bool = true
+    ) async {
+        await withCheckedContinuation { continuation in
+            if presentedTemplate != nil {
+                dismissTemplate(animated: false) { [weak self] _, _ in
+                    self?.pushTemplate(template, animated: animated) { _, _ in
+                        continuation.resume()
+                    }
+                }
+            } else {
+                pushTemplate(template, animated: animated) { _, _ in
+                    continuation.resume()
+                }
+            }
         }
     }
 
-    private func runNextIfNeeded() {
-        guard !isRunning, !operations.isEmpty else { return }
-        isRunning = true
-        let next = operations.removeFirst()
-        Task {
-            await next()
-            queue.async {
-                self.isRunning = false
-                self.runNextIfNeeded()
+    private func dismissAndSetAsRoot(
+        template: CPTemplate,
+        animated: Bool = true
+    ) async {
+        await withCheckedContinuation { continuation in
+            if presentedTemplate != nil {
+                dismissTemplate(animated: false) { [weak self] _, _ in
+                    self?.setRootTemplate(template, animated: animated) { _, _ in
+                        continuation.resume()
+                    }
+                }
+            } else {
+                setRootTemplate(template, animated: animated) { _, _ in
+                    continuation.resume()
+                }
             }
         }
     }
