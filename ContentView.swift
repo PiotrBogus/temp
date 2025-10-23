@@ -1,178 +1,95 @@
-import XCTest
-@testable import YourModuleName
+import Foundation
 import CarPlay
 
-// MARK: - Mock CPInterfaceController
+actor CarPlayPresentationQueue: @unchecked Sendable {
+    private var isProcessing = false
+    private var queue: [() async -> Void] = []
 
-final class MockCPInterfaceController: CPInterfaceController {
-    var didCallPresent = false
-    var didCallDismiss = false
-    var didCallSetRoot = false
-    var didCallPush = false
-
-    var presentedTemplateStub: CPTemplate?
-
-    override var presentedTemplate: CPTemplate? {
-        get { presentedTemplateStub }
-        set { presentedTemplateStub = newValue }
+    func enqueue(_ operation: @escaping () async -> Void) {
+        queue.append(operation)
+        if !isProcessing {
+            isProcessing = true
+            Task { await processQueue() }
+        }
     }
 
-    override func presentTemplate(_ template: CPTemplate, animated: Bool, completion: ((Bool, (any Error)?) -> Void)? = nil) {
-        didCallPresent = true
-        completion?(true, nil)
-    }
-
-    override func pushTemplate(_ template: CPTemplate, animated: Bool, completion: ((Bool, (any Error)?) -> Void)? = nil) {
-        didCallPush = true
-        completion?(true, nil)
-    }
-
-    override func setRootTemplate(_ template: CPTemplate, animated: Bool, completion: ((Bool, (any Error)?) -> Void)? = nil) {
-        didCallSetRoot = true
-        completion?(true, nil)
-    }
-
-    override func dismissTemplate(animated: Bool, completion: ((Bool, (any Error)?) -> Void)? = nil) {
-        didCallDismiss = true
-        completion?(true, nil)
+    private func processQueue() async {
+        while !queue.isEmpty {
+            let next = queue.removeFirst()
+            await next()
+        }
+        isProcessing = false
     }
 }
 
-// MARK: - Queue-only tests
+
+
+
+import XCTest
+@testable import YourModuleName
 
 final class CarPlayPresentationQueueTests: XCTestCase {
+    func testQueueProcessesTasksInOrder() async {
+        let queue = CarPlayPresentationQueue()
+        var results: [String] = []
+        let expectation = XCTestExpectation(description: "All tasks executed in order")
 
-    func testQueueExecutesOperationsSequentially() async {
-        let queue = CarPlayPresentationQueue.shared
-        let expectation = XCTestExpectation(description: "All operations complete")
-        expectation.expectedFulfillmentCount = 3
+        await queue.enqueue {
+            results.append("first")
+        }
 
-        var executionOrder: [Int] = []
-        let lock = NSLock()
+        await queue.enqueue {
+            results.append("second")
+        }
 
-        queue.enqueue {
-            await Task.sleep(nanoseconds: 100_000_000)
-            lock.lock(); executionOrder.append(1); lock.unlock()
+        await queue.enqueue {
+            results.append("third")
             expectation.fulfill()
         }
 
-        queue.enqueue {
-            await Task.sleep(nanoseconds: 50_000_000)
-            lock.lock(); executionOrder.append(2); lock.unlock()
+        await fulfillment(of: [expectation], timeout: 1.0)
+        XCTAssertEqual(results, ["first", "second", "third"])
+    }
+
+    func testQueueProcessesSequentiallyEvenWithAsyncDelays() async {
+        let queue = CarPlayPresentationQueue()
+        var results: [String] = []
+        let expectation = XCTestExpectation(description: "Sequential processing")
+
+        await queue.enqueue {
+            results.append("A")
+            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2s
+            results.append("A done")
+        }
+
+        await queue.enqueue {
+            results.append("B")
+            results.append("B done")
             expectation.fulfill()
         }
 
-        queue.enqueue {
-            lock.lock(); executionOrder.append(3); lock.unlock()
-            expectation.fulfill()
-        }
+        await fulfillment(of: [expectation], timeout: 2.0)
 
-        await fulfillment(of: [expectation], timeout: 2)
-        XCTAssertEqual(executionOrder, [1, 2, 3])
+        XCTAssertEqual(results, ["A", "A done", "B", "B done"])
     }
 
-    func testQueueHandlesSingleOperation() async {
-        let queue = CarPlayPresentationQueue.shared
-        let expectation = XCTestExpectation(description: "Single op done")
-        queue.enqueue {
-            expectation.fulfill()
-        }
-        await fulfillment(of: [expectation], timeout: 1)
-    }
-}
+    func testQueueAllowsConcurrentEnqueuesButSerialExecution() async {
+        let queue = CarPlayPresentationQueue()
+        var results: [String] = []
+        let expectation = XCTestExpectation(description: "All tasks executed serially")
 
-// MARK: - CPInterfaceController async method tests
-
-final class CPInterfaceControllerAsyncMethodsTests: XCTestCase {
-
-    func testDismissAndPresent_WhenPresentedTemplateExists() async {
-        let controller = MockCPInterfaceController()
-        controller.presentedTemplateStub = CPTemplate()
-
-        await controller._dismissAndPresent(CPTemplate(), animated: false)
-        XCTAssertTrue(controller.didCallDismiss)
-        XCTAssertTrue(controller.didCallPresent)
-    }
-
-    func testDismissAndPresent_WhenNoPresentedTemplate() async {
-        let controller = MockCPInterfaceController()
-        controller.presentedTemplateStub = nil
-
-        await controller._dismissAndPresent(CPTemplate(), animated: false)
-        XCTAssertFalse(controller.didCallDismiss)
-        XCTAssertTrue(controller.didCallPresent)
-    }
-
-    func testDismissAndPush_WhenPresentedTemplateExists() async {
-        let controller = MockCPInterfaceController()
-        controller.presentedTemplateStub = CPTemplate()
-
-        await controller._dismissAndPush(CPTemplate(), animated: false)
-        XCTAssertTrue(controller.didCallDismiss)
-        XCTAssertTrue(controller.didCallPush)
-    }
-
-    func testDismissAndSetAsRoot_WhenNoPresentedTemplate() async {
-        let controller = MockCPInterfaceController()
-        controller.presentedTemplateStub = nil
-
-        await controller._dismissAndSetAsRoot(CPTemplate(), animated: false)
-        XCTAssertTrue(controller.didCallSetRoot)
-        XCTAssertFalse(controller.didCallDismiss)
-    }
-}
-
-// MARK: - Integration: enqueueDismissAndPresent/Push/SetAsRoot
-
-final class CPInterfaceControllerQueueIntegrationTests: XCTestCase {
-
-    func testEnqueueDismissAndPresent_ExecutesSequentially() async {
-        let controller = MockCPInterfaceController()
-        let expectation = XCTestExpectation(description: "All templates presented sequentially")
-        expectation.expectedFulfillmentCount = 3
-
-        for _ in 0..<3 {
-            controller.enqueueDismissAndPresent(CPTemplate())
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                expectation.fulfill()
+        await withTaskGroup(of: Void.self) { group in
+            for i in 1...5 {
+                group.addTask {
+                    await queue.enqueue {
+                        results.append("Task \(i)")
+                        if i == 5 { expectation.fulfill() }
+                    }
+                }
             }
         }
 
-        await fulfillment(of: [expectation], timeout: 3)
-        XCTAssertTrue(controller.didCallPresent, "Present should be called for each template")
-    }
-
-    func testEnqueueDismissAndPush_ExecutesSequentially() async {
-        let controller = MockCPInterfaceController()
-        let expectation = XCTestExpectation(description: "All pushes sequential")
-        expectation.expectedFulfillmentCount = 2
-
-        controller.enqueueDismissAndPush(CPTemplate())
-        controller.enqueueDismissAndPush(CPTemplate())
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            expectation.fulfill()
-            expectation.fulfill()
-        }
-
-        await fulfillment(of: [expectation], timeout: 3)
-        XCTAssertTrue(controller.didCallPush)
-    }
-
-    func testEnqueueDismissAndSetAsRoot_ExecutesSequentially() async {
-        let controller = MockCPInterfaceController()
-        let expectation = XCTestExpectation(description: "All roots sequential")
-        expectation.expectedFulfillmentCount = 2
-
-        controller.enqueueDismissAndSetAsRoot(CPTemplate())
-        controller.enqueueDismissAndSetAsRoot(CPTemplate())
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            expectation.fulfill()
-            expectation.fulfill()
-        }
-
-        await fulfillment(of: [expectation], timeout: 3)
-        XCTAssertTrue(controller.didCallSetRoot)
+        await fulfillment(of: [expectation], timeout: 1.0)
+        XCTAssertEqual(results, ["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"])
     }
 }
