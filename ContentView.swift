@@ -1,55 +1,90 @@
-import AppCompositionDomain
+import XCTest
 import ComposableArchitecture
-import SwiftUI
+@testable import AppCompositionPresentation // lub moduł z NotificationsFeature
 
-@Reducer
-public struct NotificationsFeature : Sendable{
-    @ObservableState
-    public struct State: Equatable, Sendable {
-        var items: IdentifiedArrayOf<NotificationItem> = []
-    }
+@MainActor
+final class NotificationsFeatureTests: XCTestCase {
 
-    public enum Action: Sendable {
-        case delegate(Delegate)
-        case onFirstAppear
-        case didLoadItems([NotificationItem])
-        case dismiss
-        case onMarkAllAsRead
-    }
+    func testOnFirstAppear_LoadsNotifications() async {
+        // Given
+        let mockItems = [
+            NotificationItem(
+                id: "1",
+                title: "Welcome",
+                description: "Hello User!",
+                time: "10:00"
+            ),
+            NotificationItem(
+                id: "2",
+                title: "Update",
+                description: "New version available.",
+                time: "11:30"
+            )
+        ]
 
-    @Dependency(\.notificationsFeatureClient.log) private var log
-    @Dependency(\.notificationsFeatureClient.loadNotifications) private var loadNotifications
+        let store = TestStore(
+            initialState: NotificationsFeature.State()
+        ) {
+            NotificationsFeature()
+        } withDependencies: {
+            $0.notificationsFeatureClient.loadNotifications = { mockItems }
+            $0.notificationsFeatureClient.log = { _, _ in }
+        }
 
-    public var body: some Reducer<State, Action> {
-        Reduce { state, action in
-            switch action {
-            case .onFirstAppear:
-                return loadItems()
-            case let .didLoadItems(items):
-                state.items = IdentifiedArrayOf(uniqueElements: items)
-                return .none
-            case .dismiss:
-                return .send(.delegate(.dismissNotifications))
-            case .delegate:
-                return .none
-            case .onMarkAllAsRead:
-                return .none
-            }
+        // When
+        await store.send(.onFirstAppear)
+
+        // Then
+        await store.receive(\.didLoadItems) {
+            $0.items = IdentifiedArrayOf(uniqueElements: mockItems)
         }
     }
-}
 
-extension NotificationsFeature {
-    public enum Delegate: Sendable, Equatable {
-        case dismissNotifications
-    }
-}
+    func testDidLoadItems_UpdatesState() async {
+        // Given
+        let items = [
+            NotificationItem(
+                id: "1",
+                title: "Test",
+                description: "Message body",
+                time: "08:45"
+            )
+        ]
 
-private extension NotificationsFeature {
-    private func loadItems() -> Effect<Action> {
-        return .run { send in
-            let items = try await loadNotifications()
-            await send(.didLoadItems(items))
+        let store = TestStore(
+            initialState: NotificationsFeature.State()
+        ) {
+            NotificationsFeature()
         }
+
+        // When / Then
+        await store.send(.didLoadItems(items)) {
+            $0.items = IdentifiedArrayOf(uniqueElements: items)
+        }
+    }
+
+    func testDismiss_SendsDelegate() async {
+        let store = TestStore(
+            initialState: NotificationsFeature.State()
+        ) {
+            NotificationsFeature()
+        } withDependencies: {
+            $0.notificationsFeatureClient.loadNotifications = { [] }
+            $0.notificationsFeatureClient.log = { _, _ in }
+        }
+
+        await store.send(.dismiss)
+        await store.receive(\.delegate.dismissNotifications)
+    }
+
+    func testOnMarkAllAsRead_DoesNothing() async {
+        let store = TestStore(
+            initialState: NotificationsFeature.State()
+        ) {
+            NotificationsFeature()
+        }
+
+        await store.send(.onMarkAllAsRead)
+        // Brak zmian stanu i efektów ubocznych — test przejdzie jeśli nie wystąpi błąd.
     }
 }
