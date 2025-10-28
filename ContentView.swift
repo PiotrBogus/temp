@@ -1,73 +1,154 @@
-import Foundation
+import XCTest
 import ComposableArchitecture
 import AppCompositionDomain
+@testable import AppCompositionPresentation
 
-@Reducer
-public struct MenuItemFeature: Sendable {
-    public init() {}
+@MainActor
+final class MainFeatureTests: XCTestCase {
+    func testOnFirstAppear_LoadsMenu_Success() async {
+        let mockMenuItems = [
+            MenuItemFeature.State(id: 1, parentId: nil, title: "Home"),
+            MenuItemFeature.State(id: 2, parentId: nil, title: "Sales")
+        ]
 
-    @ObservableState
-    public struct State: TreeItemResult, Identifiable, Sendable, Equatable {
-        public var children: [MenuItemFeature.State] = []
-        var identifiedArrayOfChildrens: IdentifiedArrayOf<MenuItemFeature.State> = []
+        let store = TestStore(initialState: MainFeature.State()) {
+            MainFeature()
+        } withDependencies: {
+            $0.mainFeatureClient.loadMenu = { } // symulacja bez błędu
+            $0.mainFeatureClient.buildMenuTree = { _ in mockMenuItems }
+        }
 
-        public let id: Int
-        public let parentId: Int?
-        let title: String
-        var isExpanded: Bool = false
-        var isSelected: Bool = false
+        await store.send(.onFirstAppear)
+        await store.receive(\.didLoadMenu)
+    }
 
-        var isPossibleToExpand: Bool {
-            !children.isEmpty
+    func testOnFirstAppear_LoadMenu_Failure() async {
+        let store = TestStore(initialState: MainFeature.State()) {
+            MainFeature()
+        } withDependencies: {
+            $0.mainFeatureClient.loadMenu = { throw NSError(domain: "test", code: 1) }
+        }
+
+        await store.send(.onFirstAppear)
+        await store.receive(\.errorLoadingMenu) {
+            $0.contentViewState = .error
         }
     }
 
-    public indirect enum Action: Sendable, Equatable {
-        case onAppear
-        case delegate(Delegate)
-        case didTapItem(id: Int)
-        case children(IdentifiedActionOf<MenuItemFeature>)
+    func testDidTapRetry_ReloadsMenu() async {
+        let mockMenuItems = [
+            MenuItemFeature.State(id: 5, parentId: nil, title: "Reports")
+        ]
 
-        @CasePathable
-        public enum Delegate: Sendable, Equatable {
-            case didTapItem(MenuItemTapModel)
+        let store = TestStore(initialState: MainFeature.State()) {
+            MainFeature()
+        } withDependencies: {
+            $0.mainFeatureClient.loadMenu = { }
+            $0.mainFeatureClient.buildMenuTree = { _ in mockMenuItems }
+        }
+
+        await store.send(.didTapRetry) {
+            $0.contentViewState = .loading
+        }
+
+        await store.receive(\.didLoadMenu)
+    }
+
+    func testMenuDelegate_DismissMenu() async {
+        var state = MainFeature.State()
+        state.menu = MenuFeature.State(menuItems: [])
+        state.isMenuVisible = true
+
+        let store = TestStore(initialState: state) {
+            MainFeature()
+        }
+
+        await store.send(.menu(.delegate(.dismissMenu))) {
+            $0.isMenuVisible = false
+            $0.menu = nil
         }
     }
 
-    @Dependency(\.menuItemFeatureClient.log) private var log
+    func testMenuDelegate_DidSelectMenuItem() async {
+        var state = MainFeature.State()
+        state.menu = MenuFeature.State(menuItems: [])
+        state.isMenuVisible = true
 
-    public var body: some Reducer<State, Action> {
-        Reduce { state, action in
-            switch action {
-            case .onAppear:
-                state.identifiedArrayOfChildrens = IdentifiedArrayOf(uniqueElements: state.children)
-                return .none
-
-            case let .didTapItem(id):
-                log(.debug, "did tap item: \(id)")
-
-                if state.isPossibleToExpand {
-                    state.isExpanded.toggle()
-                } else {
-                    state.isSelected.toggle()
-                }
-
-                return .send(.delegate(.didTapItem(MenuItemTapModel(id: id, isExpand: state.isPossibleToExpand))))
-
-            case let .children(.element(_, .delegate(.didTapItem(model)))):
-                return .send(.delegate(.didTapItem(model)))
-
-            case .children, .delegate:
-                return .none
-            }
+        let store = TestStore(initialState: state) {
+            MainFeature()
         }
-        .forEach(\.identifiedArrayOfChildrens, action: \.children) {
-            MenuItemFeature()
+
+        await store.send(.menu(.delegate(.didSelectMenuItem(id: 99)))) {
+            $0.selectedMenuItemId = 99
+            $0.isMenuVisible = false
+            $0.menu = nil
         }
     }
-}
 
-public struct MenuItemTapModel: Sendable, Equatable {
-    public let id: Int
-    public let isExpand: Bool
+    func testUpdateMenuVisibility_False_RemovesMenu() async {
+        var state = MainFeature.State()
+        state.menu = MenuFeature.State(menuItems: [])
+        state.isMenuVisible = true
+
+        let store = TestStore(initialState: state) {
+            MainFeature()
+        }
+
+        await store.send(.updateMenuVisibility(false)) {
+            $0.isMenuVisible = false
+            $0.menu = nil
+        }
+    }
+
+    func testBottomBar_Taps_ShowDestinations() async {
+        let store = TestStore(initialState: MainFeature.State()) {
+            MainFeature()
+        }
+
+        await store.send(.bottomBar(.featuresTapped)) {
+            $0.destination = .features(FeaturesFeature.State())
+        }
+
+        await store.send(.bottomBar(.notificationsTapped)) {
+            $0.destination = .notifications(NotificationsFeature.State())
+        }
+
+        await store.send(.bottomBar(.profileTapped)) {
+            $0.destination = .profile(ProfileFeature.State())
+        }
+
+        await store.send(.bottomBar(.searchTapped)) {
+            $0.destination = .search(SearchFeature.State())
+        }
+    }
+
+    func testMainMenuTapped_BuildsMenuTree() async {
+        let mockMenuItems = [
+            MenuItemFeature.State(id: 1, parentId: nil, title: "Home")
+        ]
+
+        var state = MainFeature.State()
+        state.selectedMenuItemId = 1
+
+        let store = TestStore(initialState: state) {
+            MainFeature()
+        } withDependencies: {
+            $0.mainFeatureClient.buildMenuTree = { _ in mockMenuItems }
+        }
+
+        await store.send(.mainMenuTapped)
+        await store.receive(\.didBuildMenuTree) {
+            $0.menu = MenuFeature.State(menuItems: mockMenuItems)
+        }
+    }
+
+    func testErrorLoadingMenu_SetsErrorState() async {
+        let store = TestStore(initialState: MainFeature.State()) {
+            MainFeature()
+        }
+
+        await store.send(.errorLoadingMenu) {
+            $0.contentViewState = .error
+        }
+    }
 }
