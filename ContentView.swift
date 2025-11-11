@@ -1,77 +1,4 @@
 import ComposableArchitecture
-import Foundation
-import GenieCommonPresentation
-
-@Reducer
-public struct GraphTableFeature: Sendable {
-    public init() {}
-
-    @ObservableState
-    public struct State: Equatable, Sendable {
-        enum ContentViewState: Equatable, Sendable {
-            case loader
-            case table
-        }
-        var contentViewState: ContentViewState = .loader
-        var tableTitle: String = "Patient Share/US/Entresto"
-        var filters: [GraphTableFilter] = GraphTableFilter.mock
-        var headerItems: [TableHeader] = TableHeader.mock
-        var rows: [TableRow] = TableRow.mock
-        var columns: [TableColumn] {
-            rows.transposed()
-        }
-        var columnsWidth: [CGFloat] = []
-
-        public init() {}
-    }
-
-    public enum Action: Sendable {
-        case onAppear
-        case didCalculateColumnsWidth([CGFloat])
-    }
-
-    public var body: some Reducer<State, Action> {
-        Reduce { state, action in
-            switch action {
-            case .onAppear:
-                return calculateColumnsWidth(columns: state.columns)
-            case let .didCalculateColumnsWidth(widths):
-                state.columnsWidth = widths
-                state.contentViewState = .table
-                return .none
-            }
-        }
-    }
-
-    func calculateColumnsWidth(columns: [TableColumn]) -> Effect<Action> {
-        .run { send in
-            let titlesByColumns: [[String]] = columns.map { $0.items.map(\.title) }
-
-            let widths = await withTaskGroup(of: CGFloat.self) { group -> [CGFloat] in
-                titlesByColumns.forEach { titles in
-                    group.addTask {
-                        await ColumnWidthCalculator.maxWidth(for: titles, font: .callout)
-                    }
-                }
-                var results: [CGFloat] = []
-                for await width in group {
-                    results.append(width)
-                }
-                return results
-            }
-
-            await send(.didCalculateColumnsWidth(widths))
-        }
-    }
-}
-
-
-
-
-
-
-
-import ComposableArchitecture
 import GenieCommonPresentation
 import SwiftUI
 
@@ -97,30 +24,45 @@ public struct GraphTableView: View {
         }
     }
 
+    // MARK: - Table Content
     private var tableView: some View {
-        ScrollView {
+        ScrollView([.vertical, .horizontal]) {
             VStack(spacing: 0) {
                 headerView()
                 Divider()
                 filterView()
+                Divider().padding(.bottom, 4)
 
-                Divider()
-                tableHeader()
-                Divider()
-                    .padding(.bottom, 4)
+                // ✅ Główna część tabeli
+                HStack(alignment: .top, spacing: 8) {
+                    ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
+                        VStack(spacing: 0) {
+                            // Header komórki
+                            tableHeaderCell(
+                                for: store.headerItems[safe: index],
+                                width: store.columnsWidth[safe: index] ?? 60,
+                                alignment: index == 0 ? .leading : .trailing
+                            )
 
-                HStack {
-                    ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, item in
-                        tableColumn(for: item, alignment: index == 0 ? .leading : .trailing,
-                                    width: store.columnsWidth[index])
+                            Divider().background(Color.secondary.opacity(0.3))
+
+                            // Kolumna danych
+                            tableColumn(
+                                for: column,
+                                alignment: index == 0 ? .leading : .trailing,
+                                width: store.columnsWidth[safe: index] ?? 60
+                            )
+                        }
                     }
                 }
+                .padding(.horizontal)
 
-                Spacer()
+                Spacer(minLength: 16)
             }
         }
     }
 
+    // MARK: - Header
     @ViewBuilder
     func headerView() -> some View {
         HStack {
@@ -137,6 +79,7 @@ public struct GraphTableView: View {
         .background(Color.white)
     }
 
+    // MARK: - Filter
     @ViewBuilder
     func filterView() -> some View {
         HStack {
@@ -161,55 +104,70 @@ public struct GraphTableView: View {
         .padding(.vertical, 8)
     }
 
+    // MARK: - Single Header Cell
     @ViewBuilder
-    func tableHeader() -> some View {
-        HStack {
-            ForEach(store.headerItems) { header in
-                VStack {
-                    HStack {
-                        VStack {
-                            Text(header.title)
-                                .font(.callout)
-                                .fontWeight(.semibold)
-                            if let subtitle = header.subtitle {
-                                Text(subtitle)
-                                    .font(.footnote)
-                                    .fontWeight(.light)
-                                    .italic()
-                            }
-                        }
-                        if header.isDropdown {
-                            Image(systemName: "chevron.down")
-                                .font(.callout)
+    func tableHeaderCell(for header: TableHeader?, width: CGFloat, alignment: HorizontalAlignment) -> some View {
+        VStack(alignment: alignment, spacing: 2) {
+            if let header {
+                HStack(alignment: .center, spacing: 4) {
+                    VStack(alignment: alignment, spacing: 2) {
+                        Text(header.title)
+                            .font(.callout)
+                            .fontWeight(.semibold)
+                        if let subtitle = header.subtitle {
+                            Text(subtitle)
+                                .font(.footnote)
+                                .italic()
+                                .foregroundColor(.secondary)
                         }
                     }
-                    .padding(4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(header.isDropdown ? Color.headerBackround : Color.whiteBackground)
-                    )
+
+                    if header.isDropdown {
+                        Image(systemName: "chevron.down")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
+                .frame(width: width, alignment: alignment == .leading ? .leading : .trailing)
+                .padding(4)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(header.isDropdown ? Color.headerBackround : Color.whiteBackground)
+                )
+            } else {
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: width, height: 30)
             }
         }
-        .padding(.horizontal)
-        .padding(.bottom, 6)
     }
 
+    // MARK: - Table Column
     @ViewBuilder
     func tableColumn(for column: TableColumn, alignment: HorizontalAlignment, width: CGFloat) -> some View {
-        VStack(alignment: alignment) {
+        VStack(alignment: alignment, spacing: 8) {
             ForEach(column.items) { item in
                 Text(item.title)
                     .foregroundStyle(item.color)
                     .font(.callout)
+                    .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
+                    .padding(.horizontal, 4)
 
-                Divider()
+                Divider().background(Color.secondary.opacity(0.1))
             }
         }
-        .frame(width: width)
+        .frame(width: width + 12) // lekki margines dla czytelności
     }
 }
 
+// MARK: - Safe index helper
+extension Collection {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
+
+// MARK: - Preview
 #Preview {
     GraphTableView(store: Store(initialState: GraphTableFeature.State()) {
         GraphTableFeature()
