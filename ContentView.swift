@@ -121,12 +121,12 @@ public struct GraphTableView: View {
             HStack(spacing: 4) {
                 VStack(alignment: alignment, spacing: 2) {
                     Text(header.title)
-                        .font(.callout)
+                        .font(.footnote)
                         .fontWeight(.semibold)
                         .lineLimit(1)
                     if let subtitle = header.subtitle {
                         Text(subtitle)
-                            .font(.footnote)
+                            .font(.caption)
                             .italic()
                             .foregroundColor(.secondary)
                             .lineLimit(1)
@@ -145,7 +145,7 @@ public struct GraphTableView: View {
                     .fill(header.isDropdown ? Color.headerBackround : Color.whiteBackground)
             )
         }
-        .frame(width: width, height: Constants.cellHeight, alignment: .center)
+        .frame(width: width, height: Constants.cellHeight, alignment: alignment == .leading ? .leading : .trailing)
     }
 
     // MARK: - Table Column (Items)
@@ -157,7 +157,7 @@ public struct GraphTableView: View {
                 VStack(spacing: .zero) {
                     Text(item.title)
                         .foregroundStyle(item.color)
-                        .font(.callout)
+                        .font(.footnote)
                         .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
                         .frame(height: Constants.cellHeight)
                         .padding(.horizontal, 4)
