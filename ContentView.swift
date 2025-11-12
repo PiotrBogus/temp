@@ -8,6 +8,7 @@ public struct GraphTableView: View {
     private struct Constants {
         static let cellHeight: CGFloat = 44
         static let defaultColumnWidth: CGFloat = 80
+        static let headerInnerPadding: CGFloat = 4
     }
 
     public init(store: StoreOf<GraphTableFeature>) {
@@ -116,35 +117,35 @@ public struct GraphTableView: View {
     // MARK: - Table Header Cell
     @ViewBuilder
     func tableHeaderCell(for header: TableHeader, width: CGFloat, alignment: HorizontalAlignment) -> some View {
-        HStack(spacing: 4) {
-            VStack(alignment: alignment, spacing: 2) {
-                Text(header.title)
-                    .font(.callout)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-                if let subtitle = header.subtitle {
-                    Text(subtitle)
-                        .font(.footnote)
-                        .italic()
-                        .foregroundColor(.secondary)
+        VStack {
+            HStack(spacing: 4) {
+                VStack(alignment: alignment, spacing: 2) {
+                    Text(header.title)
+                        .font(.callout)
+                        .fontWeight(.semibold)
                         .lineLimit(1)
+                    if let subtitle = header.subtitle {
+                        Text(subtitle)
+                            .font(.footnote)
+                            .italic()
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                if header.isDropdown {
+                    Image(systemName: "chevron.down")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
             }
-
-            if header.isDropdown {
-                Image(systemName: "chevron.down")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+            .padding(Constants.headerInnerPadding)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(header.isDropdown ? Color.headerBackround : Color.whiteBackground)
+            )
         }
-        .frame(width: width, alignment: alignment == .leading ? .leading : .trailing)
-        .frame(height: Constants.cellHeight)
-        .frame(maxHeight: .infinity, alignment: .center)
-        .padding(.horizontal, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 4)
-                .fill(header.isDropdown ? Color.headerBackround : Color.whiteBackground)
-        )
+        .frame(width: width, height: Constants.cellHeight, alignment: .center)
     }
 
     // MARK: - Table Column (Items)
