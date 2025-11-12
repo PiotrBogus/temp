@@ -41,7 +41,6 @@ public struct GraphTableView: View {
 
     // MARK: - Table
     private func tableView(availableWidth: CGFloat) -> some View {
-        // 🔹 wyliczamy szerokość całkowitą tabeli
         let computedWidth = store.columnsWidth.reduce(0, +) + CGFloat(store.columns.count - 1) * Constants.horizontalSpacing
         let needsHorizontalScroll = computedWidth > availableWidth
 
@@ -51,7 +50,6 @@ public struct GraphTableView: View {
                     tableContent()
                 }
             } else {
-                // 🔹 jeśli tabela mieści się na ekranie — nie przewijamy poziomo
                 ScrollView(.vertical) {
                     tableContent(evenlyDistributed: true)
                         .frame(width: availableWidth)
@@ -68,22 +66,21 @@ public struct GraphTableView: View {
             Divider()
             filterView()
 
-            // ✅ header section
+            // ✅ Header section
             VStack(spacing: .zero) {
                 Divider()
 
                 HStack(alignment: .center, spacing: evenlyDistributed ? 0 : Constants.horizontalSpacing) {
                     ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
-                        let width = evenlyDistributed
-                            ? nil // kolumna rozciąga się równomiernie
-                            : getColumnWidth(index: index)
+                        let alignment: HorizontalAlignment = index == 0 ? .leading : .trailing
+                        let width = evenlyDistributed ? nil : getColumnWidth(index: index)
 
                         tableHeaderCell(
                             for: column.header,
                             width: width,
-                            alignment: index == 0 ? .leading : .trailing
+                            alignment: alignment
                         )
-                        .frame(maxWidth: evenlyDistributed ? .infinity : nil)
+                        .frame(maxWidth: evenlyDistributed ? .infinity : nil, alignment: alignment == .leading ? .leading : .trailing)
                     }
                 }
                 .frame(height: Constants.cellHeight)
@@ -91,19 +88,18 @@ public struct GraphTableView: View {
                 Divider()
             }
 
-            // ✅ columns section
+            // ✅ Columns section
             HStack(alignment: .top, spacing: evenlyDistributed ? 0 : Constants.horizontalSpacing) {
                 ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
-                    let width = evenlyDistributed
-                        ? nil
-                        : getColumnWidth(index: index)
+                    let alignment: HorizontalAlignment = index == 0 ? .leading : .trailing
+                    let width = evenlyDistributed ? nil : getColumnWidth(index: index)
 
                     tableColumn(
                         for: column.items,
-                        alignment: index == 0 ? .leading : .trailing,
+                        alignment: alignment,
                         width: width
                     )
-                    .frame(maxWidth: evenlyDistributed ? .infinity : nil)
+                    .frame(maxWidth: evenlyDistributed ? .infinity : nil, alignment: alignment == .leading ? .leading : .trailing)
                 }
             }
 
@@ -153,18 +149,21 @@ public struct GraphTableView: View {
         .padding(.vertical, 8)
     }
 
-    // MARK: - Table Header Cell
+    // MARK: - Table Header Cell (aligned with column)
     @ViewBuilder
     func tableHeaderCell(for header: TableHeader, width: CGFloat?, alignment: HorizontalAlignment) -> some View {
         VStack {
             HStack(spacing: 4) {
+                if alignment == .trailing {
+                    Spacer(minLength: 0)
+                }
+
                 VStack(alignment: alignment, spacing: 2) {
                     Text(header.title)
                         .font(.footnote)
                         .fontWeight(.semibold)
-                        .minimumScaleFactor(0.7) // ✅ zamiast ellipsy
+                        .minimumScaleFactor(0.7)
                         .lineLimit(1)
-                        .fixedSize(horizontal: false, vertical: true)
 
                     if let subtitle = header.subtitle {
                         Text(subtitle)
@@ -180,6 +179,10 @@ public struct GraphTableView: View {
                     Image(systemName: "chevron.down")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                }
+
+                if alignment == .leading {
+                    Spacer(minLength: 0)
                 }
             }
             .padding(Constants.headerInnerPadding)
