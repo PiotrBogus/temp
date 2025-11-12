@@ -9,19 +9,28 @@ public struct GraphTableView: View {
         static let cellHeight: CGFloat = 44
         static let defaultColumnWidth: CGFloat = 80
         static let headerInnerPadding: CGFloat = 4
+        static let horizontalSpacing: CGFloat = 8
     }
+
+    @State private var totalTableWidth: CGFloat = 0
+    @State private var availableWidth: CGFloat = 0
 
     public init(store: StoreOf<GraphTableFeature>) {
         self.store = store
     }
 
     public var body: some View {
-        ZStack {
-            switch store.contentViewState {
-            case .loader:
-                LoaderView()
-            case .table:
-                tableView
+        GeometryReader { geometry in
+            ZStack {
+                switch store.contentViewState {
+                case .loader:
+                    LoaderView()
+                case .table:
+                    tableView(availableWidth: geometry.size.width)
+                }
+            }
+            .onAppear {
+                availableWidth = geometry.size.width
             }
         }
         .background(Color.whiteBackground)
@@ -31,44 +40,74 @@ public struct GraphTableView: View {
     }
 
     // MARK: - Table
-    private var tableView: some View {
-        ScrollView([.vertical, .horizontal]) {
-            VStack(spacing: .zero) {
-                headerView()
-                Divider()
-                filterView()
+    private func tableView(availableWidth: CGFloat) -> some View {
+        // 🔹 wyliczamy szerokość całkowitą tabeli
+        let computedWidth = store.columnsWidth.reduce(0, +) + CGFloat(store.columns.count - 1) * Constants.horizontalSpacing
+        let needsHorizontalScroll = computedWidth > availableWidth
 
-                // ✅ header
-                VStack(spacing: .zero) {
-                    Divider()
-
-                    HStack(alignment: .center, spacing: .zero) {
-                        ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
-                            tableHeaderCell(
-                                for: column.header,
-                                width: getColumnWidth(index: index),
-                                alignment: index == 0 ? .leading : .trailing
-                            )
-                        }
-                    }
-                    .frame(height: Constants.cellHeight)
-
-                    Divider()
+        return Group {
+            if needsHorizontalScroll {
+                ScrollView([.vertical, .horizontal]) {
+                    tableContent()
                 }
-
-                // ✅ columns section
-                HStack(alignment: .top, spacing: .zero) {
-                    ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
-                        tableColumn(
-                            for: column.items,
-                            alignment: index == 0 ? .leading : .trailing,
-                            width: getColumnWidth(index: index)
-                        )
-                    }
+            } else {
+                // 🔹 jeśli tabela mieści się na ekranie — nie przewijamy poziomo
+                ScrollView(.vertical) {
+                    tableContent(evenlyDistributed: true)
+                        .frame(width: availableWidth)
                 }
-
-                Spacer(minLength: 16)
             }
+        }
+    }
+
+    // MARK: - Table Content
+    @ViewBuilder
+    private func tableContent(evenlyDistributed: Bool = false) -> some View {
+        VStack(spacing: .zero) {
+            headerView()
+            Divider()
+            filterView()
+
+            // ✅ header section
+            VStack(spacing: .zero) {
+                Divider()
+
+                HStack(alignment: .center, spacing: evenlyDistributed ? 0 : Constants.horizontalSpacing) {
+                    ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
+                        let width = evenlyDistributed
+                            ? nil // kolumna rozciąga się równomiernie
+                            : getColumnWidth(index: index)
+
+                        tableHeaderCell(
+                            for: column.header,
+                            width: width,
+                            alignment: index == 0 ? .leading : .trailing
+                        )
+                        .frame(maxWidth: evenlyDistributed ? .infinity : nil)
+                    }
+                }
+                .frame(height: Constants.cellHeight)
+
+                Divider()
+            }
+
+            // ✅ columns section
+            HStack(alignment: .top, spacing: evenlyDistributed ? 0 : Constants.horizontalSpacing) {
+                ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
+                    let width = evenlyDistributed
+                        ? nil
+                        : getColumnWidth(index: index)
+
+                    tableColumn(
+                        for: column.items,
+                        alignment: index == 0 ? .leading : .trailing,
+                        width: width
+                    )
+                    .frame(maxWidth: evenlyDistributed ? .infinity : nil)
+                }
+            }
+
+            Spacer(minLength: 16)
         }
     }
 
@@ -116,20 +155,24 @@ public struct GraphTableView: View {
 
     // MARK: - Table Header Cell
     @ViewBuilder
-    func tableHeaderCell(for header: TableHeader, width: CGFloat, alignment: HorizontalAlignment) -> some View {
+    func tableHeaderCell(for header: TableHeader, width: CGFloat?, alignment: HorizontalAlignment) -> some View {
         VStack {
             HStack(spacing: 4) {
                 VStack(alignment: alignment, spacing: 2) {
                     Text(header.title)
                         .font(.footnote)
                         .fontWeight(.semibold)
+                        .minimumScaleFactor(0.7) // ✅ zamiast ellipsy
                         .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
+
                     if let subtitle = header.subtitle {
                         Text(subtitle)
                             .font(.caption)
                             .italic()
                             .foregroundColor(.secondary)
                             .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                     }
                 }
 
@@ -150,7 +193,7 @@ public struct GraphTableView: View {
 
     // MARK: - Table Column (Items)
     @ViewBuilder
-    func tableColumn(for items: [TableItem], alignment: HorizontalAlignment, width: CGFloat) -> some View {
+    func tableColumn(for items: [TableItem], alignment: HorizontalAlignment, width: CGFloat?) -> some View {
         VStack(alignment: alignment, spacing: .zero) {
             ForEach(items.indices, id: \.self) { index in
                 let item = items[index]
@@ -158,6 +201,8 @@ public struct GraphTableView: View {
                     Text(item.title)
                         .foregroundStyle(item.color)
                         .font(.footnote)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
                         .frame(height: Constants.cellHeight)
                         .padding(.horizontal, 4)
@@ -169,7 +214,7 @@ public struct GraphTableView: View {
                 }
             }
         }
-        .frame(width: width + 12)
+        .frame(width: width.map { $0 + 12 })
     }
 
     private func getColumnWidth(index: Int) -> CGFloat {
