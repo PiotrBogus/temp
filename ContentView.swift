@@ -4,7 +4,7 @@ import SwiftUI
 
 // PreferenceKey mierzący maksymalną wysokość treści (headerów i komórek)
 private struct ContentHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    nonisolated(unsafe) static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
     }
@@ -13,14 +13,21 @@ private struct ContentHeightKey: PreferenceKey {
 public struct GraphTableView: View {
     @Bindable var store: StoreOf<GraphTableFeature>
 
-    // dynamiczna maksymalna wysokość (mierzona)
     @State private var maxCellHeight: CGFloat = 44
     @State private var availableWidth: CGFloat = 0
+    @State private var isScrolledToBottom: Bool = false
+
+    private var isHorizontalScrollEnabled: Bool {
+        let computedWidth = store.columnsWidth.reduce(0, +) + CGFloat(max(0, store.columns.count - 1)) * Constants.horizontalSpacing
+        return computedWidth > availableWidth
+    }
 
     private struct Constants {
         static let defaultColumnWidth: CGFloat = 80
         static let headerInnerPadding: CGFloat = 4
         static let horizontalSpacing: CGFloat = 8
+        static let titleFont: Font = .footnote
+        static let subtitleFont: Font = .caption
     }
 
     public init(store: StoreOf<GraphTableFeature>) {
@@ -34,14 +41,13 @@ public struct GraphTableView: View {
                 case .loader:
                     LoaderView()
                 case .table:
-                    mainTable(availableWidth: geo.size.width)
+                    mainTable
                 }
             }
             .onAppear { availableWidth = geo.size.width }
         }
         .background(Color.whiteBackground)
         .task { store.send(.onAppear) }
-        // gdy preferenceKey się zmieni, ustawiamy wysokość (bez dodawania "magicznych" offsetów)
         .onPreferenceChange(ContentHeightKey.self) { newH in
             if newH > 0 && newH != maxCellHeight {
                 maxCellHeight = newH
@@ -49,13 +55,9 @@ public struct GraphTableView: View {
         }
     }
 
-    private func mainTable(availableWidth: CGFloat) -> some View {
-        // obliczenie szer. całkowitej na podstawie store.columnsWidth (tej, którą liczy feature)
-        let computedWidth = store.columnsWidth.reduce(0, +) + CGFloat(max(0, store.columns.count - 1)) * Constants.horizontalSpacing
-        let needsHorizontalScroll = computedWidth > availableWidth
-
-        return Group {
-            if needsHorizontalScroll {
+    private var mainTable: some View {
+        Group {
+            if isHorizontalScrollEnabled {
                 ScrollView([.vertical, .horizontal]) {
                     tableContent(evenly: false)
                 }
@@ -68,7 +70,6 @@ public struct GraphTableView: View {
         }
     }
 
-    // główna treść tabeli
     @ViewBuilder
     private func tableContent(evenly: Bool) -> some View {
         VStack(spacing: .zero) {
@@ -78,7 +79,8 @@ public struct GraphTableView: View {
 
             // header section
             VStack(spacing: .zero) {
-                Divider() // górny
+                Divider()
+
                 HStack(alignment: .center, spacing: evenly ? 0 : Constants.horizontalSpacing) {
                     ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
                         let alignment: HorizontalAlignment = index == 0 ? .leading : .trailing
@@ -90,8 +92,9 @@ public struct GraphTableView: View {
                         }
                     }
                 }
-                .frame(height: maxCellHeight) // wysokość wyrównana do zmierzonej
-                Divider() // dolny
+                .frame(height: maxCellHeight)
+
+                Divider()
             }
 
             // data columns
@@ -111,7 +114,6 @@ public struct GraphTableView: View {
         }
     }
 
-    // title bar
     @ViewBuilder
     private func titleBar() -> some View {
         HStack {
@@ -126,7 +128,6 @@ public struct GraphTableView: View {
         .background(Color.white)
     }
 
-    // filter bar
     @ViewBuilder
     private func filterBar() -> some View {
         HStack {
@@ -148,52 +149,51 @@ public struct GraphTableView: View {
         .padding(.vertical, 8)
     }
 
-    // header cell — tło tylko wokół treści z paddingiem 4
     @ViewBuilder
     private func headerCell(_ header: TableHeader, width: CGFloat? = nil, alignment: HorizontalAlignment) -> some View {
-        // HStack kontroluje alignment wizualny; tło jest tylko za zawartością (padding)
         HStack {
             if alignment == .trailing { Spacer(minLength: 0) }
 
             HStack(spacing: 4) {
                 VStack(alignment: alignment, spacing: 2) {
                     Text(header.title)
-                        .font(.footnote)
+                        .font(Constants.titleFont)
                         .fontWeight(.semibold)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                        .foregroundColor(Color.text)
+
                     if let subtitle = header.subtitle {
                         Text(subtitle)
-                            .font(.caption)
+                            .font(Constants.subtitleFont)
                             .italic()
-                            .foregroundColor(.secondary)
+                            .foregroundColor(Color.headerButtonSubtitle)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.7)
                     }
                 }
 
                 if header.isDropdown {
                     Image(systemName: "chevron.down")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(Color.text)
+                        .font(Constants.subtitleFont)
                 }
             }
-            .padding(4) // <-- tło będzie o 4 px większe z każdej strony
+            .padding(Constants.headerInnerPadding)
             .background(
                 RoundedRectangle(cornerRadius: 4)
                     .fill(header.isDropdown ? Color.headerBackround : Color.whiteBackground)
             )
-            // Mierzymy wysokość treści (bez dodatkowych „+8”), żeby preference dawało realną wysokość
-            .background(GeometryReader { proxy in
-                Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
-            })
 
-            if alignment == .leading { Spacer(minLength: 0) }
+            if alignment == .leading {
+                Spacer(minLength: 0)
+            }
         }
+        .padding(.vertical, Constants.headerInnerPadding)
+        .background(GeometryReader { proxy in
+            Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
+        })
         .frame(width: width, height: maxCellHeight, alignment: alignment == .leading ? .leading : .trailing)
     }
 
-    // kolumna danych; każdy wiersz mierzy swoją treść wysokości i ustawia tę wysokość
     @ViewBuilder
     private func columnView(items: [TableItem], alignment: HorizontalAlignment, width: CGFloat? = nil) -> some View {
         VStack(alignment: alignment, spacing: .zero) {
@@ -203,9 +203,8 @@ public struct GraphTableView: View {
                     if alignment == .trailing { Spacer(minLength: 0) }
 
                     Text(item.title)
-                        .font(.footnote)
+                        .font(Constants.titleFont)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.7)
                         .foregroundStyle(item.color)
                         .padding(.horizontal, 4)
                         .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
@@ -233,4 +232,86 @@ public struct GraphTableView: View {
 // safe index
 extension Collection {
     subscript(safe index: Index) -> Element? { indices.contains(index) ? self[index] : nil }
+}
+
+
+
+import ComposableArchitecture
+import Foundation
+import GenieCommonPresentation
+
+@Reducer
+public struct GraphTableFeature: Sendable {
+    public init() {}
+
+    @ObservableState
+    public struct State: Equatable, Sendable {
+        enum ContentViewState: Equatable, Sendable {
+            case loader
+            case table
+        }
+        var contentViewState: ContentViewState = .loader
+        var tableTitle: String = "Patient Share/US/Entresto"
+        var filters: [GraphTableFilter] = GraphTableFilter.mock
+        var columns: [TableColumn] = TableColumn.mock
+        var columnsWidth: [CGFloat] = []
+
+        public init() {}
+    }
+
+    public enum Action: Sendable {
+        case onAppear
+        case didCalculateColumnsWidth([CGFloat])
+    }
+
+    public var body: some Reducer<State, Action> {
+        Reduce { state, action in
+            switch action {
+            case .onAppear:
+                return calculateColumnsWidth(columns: state.columns)
+            case let .didCalculateColumnsWidth(widths):
+                state.columnsWidth = widths
+                state.contentViewState = .table
+                return .none
+            }
+        }
+    }
+
+    func calculateColumnsWidth(columns: [TableColumn]) -> Effect<Action> {
+        .run { send in
+            let titlesByColumns: [[String]] = columns.map { column in
+                var titles = column.items.map(\.title)
+                titles.append(column.header.title)
+                if let subtitle = column.header.subtitle {
+                    titles.append(subtitle)
+                }
+                return titles
+            }
+
+            let baseWidths = await withTaskGroup(of: CGFloat.self) { group -> [CGFloat] in
+                for titles in titlesByColumns {
+                    group.addTask {
+                        await ColumnWidthCalculator.maxWidth(for: titles, font: .footnote)
+                    }
+                }
+
+                var results: [CGFloat] = []
+                for await width in group {
+                    results.append(width)
+                }
+                return results
+            }
+
+            let adjustedWidths = baseWidths.enumerated().map { index, width in
+                let header = columns[index].header
+                var adjusted = width + 16 // padding left + right
+                if header.isDropdown {
+                    adjusted += 12 // icon width + spacing
+                }
+                return adjusted
+            }
+
+            await send(.didCalculateColumnsWidth(adjustedWidths))
+        }
+    }
 }
