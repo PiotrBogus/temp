@@ -31,22 +31,29 @@ public struct GraphTableView: View {
                 headerView()
                 Divider()
                 filterView()
-                Divider().padding(.bottom, 4)
 
-                // ✅ Sekcja nagłówków kolumn
-                HStack(alignment: .bottom, spacing: 8) {
-                    ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
-                        tableHeaderCell(
-                            for: column.header,
-                            width: store.columnsWidth[safe: index] ?? 80,
-                            alignment: index == 0 ? .leading : .trailing
-                        )
+                // ✅ Sekcja headera kolumn
+                VStack(spacing: 0) {
+                    Divider()
+                        .padding(.vertical, 4) // 🔹 górny divider z paddingiem
+
+                    HStack(alignment: .center, spacing: 8) {
+                        ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
+                            tableHeaderCell(
+                                for: column.header,
+                                width: store.columnsWidth[safe: index] ?? 80,
+                                alignment: index == 0 ? .leading : .trailing
+                            )
+                        }
                     }
-                }
-                .padding(.horizontal)
-                Divider().padding(.bottom, 4)
+                    .frame(height: 44)
+                    .padding(.horizontal)
 
-                // ✅ Sekcja wierszy
+                    Divider()
+                        .padding(.vertical, 4) // 🔹 dolny divider z paddingiem
+                }
+
+                // ✅ Sekcja kolumn z danymi
                 HStack(alignment: .top, spacing: 8) {
                     ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
                         tableColumn(
@@ -122,6 +129,7 @@ public struct GraphTableView: View {
                         .lineLimit(1)
                 }
             }
+
             if header.isDropdown {
                 Image(systemName: "chevron.down")
                     .font(.caption)
@@ -129,8 +137,8 @@ public struct GraphTableView: View {
             }
         }
         .frame(width: width, alignment: alignment == .leading ? .leading : .trailing)
+        .frame(maxHeight: .infinity, alignment: .center) // ✅ pionowe wyśrodkowanie
         .padding(.horizontal, 8)
-        .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 4)
                 .fill(header.isDropdown ? Color.headerBackround : Color.whiteBackground)
