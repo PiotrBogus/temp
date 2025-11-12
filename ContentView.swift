@@ -5,6 +5,11 @@ import SwiftUI
 public struct GraphTableView: View {
     @Bindable var store: StoreOf<GraphTableFeature>
 
+    private struct Constants {
+        static let cellHeight: CGFloat = 44
+        static let defaultColumnWidth: CGFloat = 80
+    }
+
     public init(store: StoreOf<GraphTableFeature>) {
         self.store = store
     }
@@ -27,36 +32,36 @@ public struct GraphTableView: View {
     // MARK: - Table
     private var tableView: some View {
         ScrollView([.vertical, .horizontal]) {
-            VStack(spacing: 0) {
+            VStack(spacing: .zero) {
                 headerView()
                 Divider()
                 filterView()
 
-                // ✅ Sekcja headera kolumn
-                VStack(spacing: 0) {
-                    Divider() // 🔹 bez paddingu – zgrywa się z tabelą poniżej
+                // ✅ header
+                VStack(spacing: .zero) {
+                    Divider()
 
-                    HStack(alignment: .center, spacing: 0) {
+                    HStack(alignment: .center, spacing: .zero) {
                         ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
                             tableHeaderCell(
                                 for: column.header,
-                                width: store.columnsWidth[safe: index] ?? 80,
+                                width: getColumnWidth(index: index),
                                 alignment: index == 0 ? .leading : .trailing
                             )
                         }
                     }
-                    .frame(height: 44) // 🔹 taka sama wysokość jak wiersze danych
+                    .frame(height: Constants.cellHeight)
 
-                    Divider() // 🔹 bez odstępów
+                    Divider()
                 }
 
-                // ✅ Sekcja kolumn z danymi
-                HStack(alignment: .top, spacing: 0) {
+                // ✅ columns section
+                HStack(alignment: .top, spacing: .zero) {
                     ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
                         tableColumn(
                             for: column.items,
                             alignment: index == 0 ? .leading : .trailing,
-                            width: store.columnsWidth[safe: index] ?? 80
+                            width: getColumnWidth(index: index)
                         )
                     }
                 }
@@ -133,7 +138,7 @@ public struct GraphTableView: View {
             }
         }
         .frame(width: width, alignment: alignment == .leading ? .leading : .trailing)
-        .frame(height: 44) // 🔹 taka sama wysokość jak wiersze danych
+        .frame(height: Constants.cellHeight)
         .frame(maxHeight: .infinity, alignment: .center)
         .padding(.horizontal, 8)
         .background(
@@ -145,15 +150,15 @@ public struct GraphTableView: View {
     // MARK: - Table Column (Items)
     @ViewBuilder
     func tableColumn(for items: [TableItem], alignment: HorizontalAlignment, width: CGFloat) -> some View {
-        VStack(alignment: alignment, spacing: 0) {
+        VStack(alignment: alignment, spacing: .zero) {
             ForEach(items.indices, id: \.self) { index in
                 let item = items[index]
-                VStack(spacing: 0) {
+                VStack(spacing: .zero) {
                     Text(item.title)
                         .foregroundStyle(item.color)
                         .font(.callout)
                         .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
-                        .frame(height: 44) // 🔹 równa wysokość jak header
+                        .frame(height: Constants.cellHeight)
                         .padding(.horizontal, 4)
 
                     if index != items.indices.last {
@@ -164,6 +169,10 @@ public struct GraphTableView: View {
             }
         }
         .frame(width: width + 12)
+    }
+
+    private func getColumnWidth(index: Int) -> CGFloat {
+        store.columnsWidth[safe: index] ?? Constants.defaultColumnWidth
     }
 }
 
