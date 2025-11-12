@@ -2,18 +2,26 @@ import ComposableArchitecture
 import GenieCommonPresentation
 import SwiftUI
 
+// MARK: - Height Preference
+private struct CellHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 public struct GraphTableView: View {
     @Bindable var store: StoreOf<GraphTableFeature>
 
+    @State private var maxCellHeight: CGFloat = 44
+    @State private var totalTableWidth: CGFloat = 0
+    @State private var availableWidth: CGFloat = 0
+
     private struct Constants {
-        static let cellHeight: CGFloat = 44
         static let defaultColumnWidth: CGFloat = 80
         static let headerInnerPadding: CGFloat = 4
         static let horizontalSpacing: CGFloat = 8
     }
-
-    @State private var totalTableWidth: CGFloat = 0
-    @State private var availableWidth: CGFloat = 0
 
     public init(store: StoreOf<GraphTableFeature>) {
         self.store = store
@@ -75,15 +83,12 @@ public struct GraphTableView: View {
                         let alignment: HorizontalAlignment = index == 0 ? .leading : .trailing
                         let width = evenlyDistributed ? nil : getColumnWidth(index: index)
 
-                        tableHeaderCell(
-                            for: column.header,
-                            width: width,
-                            alignment: alignment
-                        )
-                        .frame(maxWidth: evenlyDistributed ? .infinity : nil, alignment: alignment == .leading ? .leading : .trailing)
+                        tableHeaderCell(for: column.header, width: width, alignment: alignment)
+                            .frame(maxWidth: evenlyDistributed ? .infinity : nil, alignment: alignment == .leading ? .leading : .trailing)
                     }
                 }
-                .frame(height: Constants.cellHeight)
+                .frame(height: maxCellHeight)
+                .background(Color.white)
 
                 Divider()
             }
@@ -94,16 +99,17 @@ public struct GraphTableView: View {
                     let alignment: HorizontalAlignment = index == 0 ? .leading : .trailing
                     let width = evenlyDistributed ? nil : getColumnWidth(index: index)
 
-                    tableColumn(
-                        for: column.items,
-                        alignment: alignment,
-                        width: width
-                    )
-                    .frame(maxWidth: evenlyDistributed ? .infinity : nil, alignment: alignment == .leading ? .leading : .trailing)
+                    tableColumn(for: column.items, alignment: alignment, width: width)
+                        .frame(maxWidth: evenlyDistributed ? .infinity : nil, alignment: alignment == .leading ? .leading : .trailing)
                 }
             }
 
             Spacer(minLength: 16)
+        }
+        .onPreferenceChange(CellHeightKey.self) { newHeight in
+            if newHeight > maxCellHeight {
+                maxCellHeight = newHeight
+            }
         }
     }
 
@@ -149,49 +155,58 @@ public struct GraphTableView: View {
         .padding(.vertical, 8)
     }
 
-    // MARK: - Table Header Cell (aligned with column)
+    // MARK: - Table Header Cell
     @ViewBuilder
     func tableHeaderCell(for header: TableHeader, width: CGFloat?, alignment: HorizontalAlignment) -> some View {
-        VStack {
-            HStack(spacing: 4) {
-                if alignment == .trailing {
-                    Spacer(minLength: 0)
-                }
-
-                VStack(alignment: alignment, spacing: 2) {
-                    Text(header.title)
-                        .font(.footnote)
-                        .fontWeight(.semibold)
-                        .minimumScaleFactor(0.7)
-                        .lineLimit(1)
-
-                    if let subtitle = header.subtitle {
-                        Text(subtitle)
-                            .font(.caption)
-                            .italic()
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    }
-                }
-
-                if header.isDropdown {
-                    Image(systemName: "chevron.down")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                if alignment == .leading {
-                    Spacer(minLength: 0)
-                }
-            }
-            .padding(Constants.headerInnerPadding)
-            .background(
+        GeometryReader { geo in
+            ZStack(alignment: alignment == .leading ? .leading : .trailing) {
+                // ✅ Background większy o 4px z każdej strony
                 RoundedRectangle(cornerRadius: 4)
                     .fill(header.isDropdown ? Color.headerBackround : Color.whiteBackground)
-            )
+                    .frame(
+                        width: geo.size.width + 8,
+                        height: geo.size.height + 8
+                    )
+                    .offset(x: alignment == .leading ? -4 : 4)
+
+                HStack(spacing: 4) {
+                    if alignment == .trailing {
+                        Spacer(minLength: 0)
+                    }
+
+                    VStack(alignment: alignment, spacing: 2) {
+                        Text(header.title)
+                            .font(.footnote)
+                            .fontWeight(.semibold)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .background(GeometryReader { proxy in
+                                Color.clear
+                                    .preference(key: CellHeightKey.self, value: proxy.size.height + 8)
+                            })
+
+                        if let subtitle = header.subtitle {
+                            Text(subtitle)
+                                .font(.caption)
+                                .italic()
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
+                    if header.isDropdown {
+                        Image(systemName: "chevron.down")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if alignment == .leading {
+                        Spacer(minLength: 0)
+                    }
+                }
+                .padding(Constants.headerInnerPadding)
+            }
         }
-        .frame(width: width, height: Constants.cellHeight, alignment: alignment == .leading ? .leading : .trailing)
+        .frame(width: width, height: maxCellHeight)
     }
 
     // MARK: - Table Column (Items)
@@ -204,15 +219,17 @@ public struct GraphTableView: View {
                     Text(item.title)
                         .foregroundStyle(item.color)
                         .font(.footnote)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
-                        .frame(height: Constants.cellHeight)
                         .padding(.horizontal, 4)
+                        .background(GeometryReader { proxy in
+                            Color.clear
+                                .preference(key: CellHeightKey.self, value: proxy.size.height + 8)
+                        })
+                        .frame(height: maxCellHeight)
 
                     if index != items.indices.last {
-                        Divider()
-                            .background(Color.secondary.opacity(0.1))
+                        Divider().background(Color.secondary.opacity(0.1))
                     }
                 }
             }
