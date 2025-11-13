@@ -1,109 +1,345 @@
-import UIKit
+import ComposableArchitecture
+import Foundation
+import GenieCommonPresentation
+
+@Reducer
+public struct GraphTableFeature: Sendable {
+    public init() {}
+
+    @ObservableState
+    public struct State: Equatable, Sendable {
+        enum ContentViewState: Equatable, Sendable {
+            case loader
+            case table
+        }
+        var contentViewState: ContentViewState = .loader
+        var tableTitle: String = "Patient Share/US/Entresto"
+        var filters: [GraphTableFilter] = GraphTableFilter.mock
+        var columns: [TableColumn] = TableColumn.mock
+        var columnsWidth: [CGFloat] = []
+
+        public init() {}
+    }
+
+    public enum Action: Sendable {
+        case onAppear
+        case didCalculateColumnsWidth([CGFloat])
+    }
+
+    public var body: some Reducer<State, Action> {
+        Reduce { state, action in
+            switch action {
+            case .onAppear:
+                return calculateColumnsWidth(columns: state.columns)
+            case let .didCalculateColumnsWidth(widths):
+                state.columnsWidth = widths
+                state.contentViewState = .table
+                return .none
+            }
+        }
+    }
+}
+
+
+// MARK: - Column width calculation logic
+private extension GraphTableFeature {
+    func calculateColumnsWidth(columns: [TableColumn]) -> Effect<Action> {
+        .run { send in
+            let widths = await computeAllColumnWidths(columns).map(\.0)
+            await send(.didCalculateColumnsWidth(widths))
+        }
+    }
+
+    private func computeAllColumnWidths(_ columns: [TableColumn]) async -> [(CGFloat, Int)] {
+        await withTaskGroup(of: (CGFloat, Int).self) { group -> [(CGFloat, Int)] in
+            for (index, column) in columns.enumerated() {
+                group.addTask {
+                    let width = await computeSingleColumnWidth(column)
+                    return (width, index)
+                }
+            }
+
+            var results: [(CGFloat, Int)] = []
+            for await result in group { results.append(result) }
+
+            return results.sorted(by: { $0.1 < $1.1 })
+        }
+    }
+
+    private func computeSingleColumnWidth(_ column: TableColumn) async -> CGFloat {
+        async let headerWidth = computeHeaderWidth(column.header)
+        async let itemsWidth = computeItemsWidth(column.items)
+
+        let (hWidth, iWidth) = await (headerWidth, itemsWidth)
+        return max(hWidth, iWidth)
+    }
+
+    private func computeHeaderWidth(_ header: TableHeader) async -> CGFloat {
+        var texts = [header.title]
+        if let subtitle = header.subtitle {
+            texts.append(subtitle)
+        }
+
+        let baseWidth = await ColumnWidthCalculator.maxWidth(for: texts, font: .footnote)
+
+        var adjusted = baseWidth + 4 * GraphTableConstants.smallPadding
+        if header.isDropdown {
+            adjusted += GraphTableConstants.headerIconWidth + 2 * GraphTableConstants.smallPadding
+        }
+
+        return adjusted
+    }
+
+    private func computeItemsWidth(_ items: [TableItem]) async -> CGFloat {
+        let baseWidth = await ColumnWidthCalculator.maxWidth(for: items.map(\.title), font: .footnote)
+        return baseWidth + 2 * GraphTableConstants.smallPadding
+    }
+}
+
+
+
+
+
+import ComposableArchitecture
+import GenieCommonPresentation
 import SwiftUI
 
-/// Prosty, szybki kalkulator szerokości tekstu (jedna linia).
-public enum TextWidthCalculator {
-    private static let cache = NSCache<NSString, NSNumber>()
+private struct ContentHeightKey: PreferenceKey {
+    nonisolated(unsafe) static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
 
-    /// Mierzy szerokość podanego tekstu (jedna linia) przy użyciu UIFont i opcjonalnych atrybutów.
-    /// - Parameters:
-    ///   - text: tekst do zmierzenia
-    ///   - font: UIFont użyty do renderowania
-    ///   - attributes: dodatkowe atrybuty NSAttributedString.Key (np. kern), opcjonalne
-    ///   - useCache: czy użyć prostego cache (default true)
-    /// - Returns: szerokość w punktach (CGFloat), zaokrąglona w górę (ceil)
-    public static func width(
-        for text: String,
-        font: UIFont,
-        attributes: [NSAttributedString.Key: Any]? = nil,
-        useCache: Bool = true
-    ) -> CGFloat {
-        guard !text.isEmpty else { return 0 }
+struct GraphTableConstants {
+    static let defaultColumnWidth: CGFloat = 80
+    static let smallPadding: CGFloat = 4
+    static let horizontalSpacing: CGFloat = 8
+    static let titleFont: Font = .footnote
+    static let subtitleFont: Font = .caption
+    static let headerIconWidth: CGFloat = 13
+    static let headerIconHeight: CGFloat = 8
+}
 
-        // Key dla cache — łączy tekst + font description + opcjonalne atrybuty ważne do pomiaru
-        if useCache {
-            let attrDesc = attributes?.map { "\($0.key.rawValue)=\($0.value)" }.joined(separator: "|") ?? ""
-            let cacheKey = "\(text)|font:\(font.fontName)-\(font.pointSize)|attrs:\(attrDesc)" as NSString
-            if let cached = cache.object(forKey: cacheKey) {
-                return CGFloat(truncating: cached)
+public struct GraphTableView: View {
+    @Bindable var store: StoreOf<GraphTableFeature>
+
+    @State private var maxCellHeight: CGFloat = 44
+    @State private var availableWidth: CGFloat = 0
+    @State private var isScrolledToBottom: Bool = false
+
+    private var isHorizontalScrollEnabled: Bool {
+        let computedWidth = store.columnsWidth.reduce(0, +) + CGFloat(max(0, store.columns.count - 1)) * GraphTableConstants.horizontalSpacing
+        return computedWidth > availableWidth
+    }
+
+    public init(store: StoreOf<GraphTableFeature>) {
+        self.store = store
+    }
+
+    public var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                switch store.contentViewState {
+                case .loader:
+                    LoaderView()
+                case .table:
+                    mainTable
+                }
+            }
+            .onAppear {
+                availableWidth = geo.size.width
+            }
+        }
+        .background(Color.whiteBackground)
+        .task { store.send(.onAppear) }
+        .onPreferenceChange(ContentHeightKey.self) { newH in
+            if newH > 0 && newH != maxCellHeight {
+                maxCellHeight = newH
+            }
+        }
+    }
+
+    private var mainTable: some View {
+        Group {
+            if isHorizontalScrollEnabled {
+                ScrollView([.vertical, .horizontal]) {
+                    tableContent(evenly: false)
+                }
+            } else {
+                ScrollView(.vertical) {
+                    tableContent(evenly: true)
+                        .frame(width: availableWidth)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func tableContent(evenly: Bool) -> some View {
+        VStack(spacing: .zero) {
+            titleBar()
+            Divider()
+            filterBar()
+
+            // header section
+            VStack(spacing: .zero) {
+                Divider()
+
+                HStack(alignment: .center, spacing: .zero) {
+                    ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
+                        let alignment: HorizontalAlignment = index == 0 ? .leading : .trailing
+                        headerCell(
+                            column.header,
+                            width: getColumnWidth(index: index),
+                            alignment: alignment
+                        )
+                    }
+                }
+
+                Divider()
             }
 
-            let computed = computeWidth(text: text, font: font, attributes: attributes)
-            cache.setObject(NSNumber(value: Double(computed)), forKey: cacheKey)
-            return computed
-        } else {
-            return computeWidth(text: text, font: font, attributes: attributes)
-        }
-    }
-
-    /// Mierzy szerokość dla NSAttributedString (jedna linia).
-    public static func width(for attributed: NSAttributedString, useCache: Bool = false) -> CGFloat {
-        guard attributed.length > 0 else { return 0 }
-
-        if useCache {
-            let cacheKey = "attr:\(attributed.string)|\(attributed.hash)" as NSString
-            if let cached = cache.object(forKey: cacheKey) {
-                return CGFloat(truncating: cached)
+            // data columns
+            HStack(alignment: .top, spacing: .zero) {
+                ForEach(Array(store.columns.enumerated()), id: \.element.id) { index, column in
+                    let alignment: HorizontalAlignment = index == 0 ? .leading : .trailing
+                    columnView(
+                        items: column.items,
+                        alignment: alignment,
+                        width: getColumnWidth(index: index)
+                    )
+                }
             }
-            let size = attributed.size()
-            let w = ceil(size.width)
-            cache.setObject(NSNumber(value: Double(w)), forKey: cacheKey)
-            return w
-        } else {
-            return ceil(attributed.size().width)
+
+            Spacer(minLength: 16)
         }
     }
 
-    /// Wersja wygodna dla SwiftUI Font — mapujemy do UIFont (ograniczona konwersja).
-    /// Jeśli potrzebujesz precyzyjnej konwersji, podaj bezpośrednio UIFont.
-    public static func width(
-        for text: String,
-        font: Font,
-        attributes: [NSAttributedString.Key: Any]? = nil,
-        useCache: Bool = true
-    ) -> CGFloat {
-        let uiFont = uiFont(from: font)
-        return width(for: text, font: uiFont, attributes: attributes, useCache: useCache)
-    }
-
-    // MARK: - Helpers
-
-    private static func computeWidth(text: String, font: UIFont, attributes: [NSAttributedString.Key: Any]?) -> CGFloat {
-        var attrs = attributes ?? [:]
-        attrs[.font] = font
-        // NSString API dla jednej linii — szybkie i dokładne
-        let ns = text as NSString
-        let size = ns.size(withAttributes: attrs)
-        return ceil(size.width)
-    }
-
-    /// Prosta (przybliżona) konwersja SwiftUI Font -> UIFont
-    private static func uiFont(from font: Font) -> UIFont {
-        // Najczęstsze mappingi; rozszerz w razie potrzeby
-        switch font {
-        case .largeTitle:
-            return UIFont.preferredFont(forTextStyle: .largeTitle)
-        case .title:
-            return UIFont.preferredFont(forTextStyle: .title1)
-        case .title2:
-            return UIFont.preferredFont(forTextStyle: .title2)
-        case .title3:
-            return UIFont.preferredFont(forTextStyle: .title3)
-        case .headline:
-            return UIFont.preferredFont(forTextStyle: .headline)
-        case .subheadline:
-            return UIFont.preferredFont(forTextStyle: .subheadline)
-        case .callout:
-            return UIFont.preferredFont(forTextStyle: .callout)
-        case .caption:
-            return UIFont.preferredFont(forTextStyle: .caption1)
-        case .caption2:
-            return UIFont.preferredFont(forTextStyle: .caption2)
-        case .footnote:
-            return UIFont.preferredFont(forTextStyle: .footnote)
-        default:
-            // fallback: body
-            return UIFont.preferredFont(forTextStyle: .body)
+    @ViewBuilder
+    private func titleBar() -> some View {
+        HStack {
+            Text(store.tableTitle)
+                .font(.headline)
+            Spacer()
+            Button { } label: {
+                Image(systemName: "xmark").foregroundColor(.secondary)
+            }
         }
+        .padding()
+        .background(Color.white)
     }
+
+    @ViewBuilder
+    private func filterBar() -> some View {
+        HStack {
+            Menu {
+                ForEach(store.filters) { f in Button(f.title, action: {}) }
+            } label: {
+                HStack {
+                    Text("KPI +1")
+                    Image(systemName: "chevron.down").font(.caption)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.filter)
+                .clipShape(Capsule())
+            }
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func headerCell(_ header: TableHeader, width: CGFloat? = nil, alignment: HorizontalAlignment) -> some View {
+        HStack(spacing: .zero) {
+            if alignment == .trailing {
+                Spacer()
+            }
+
+            HStack(spacing: GraphTableConstants.smallPadding) {
+                VStack(alignment: alignment, spacing: 2) {
+                    Text(header.title)
+                        .font(GraphTableConstants.titleFont)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                        .foregroundColor(Color.text)
+
+                    if let subtitle = header.subtitle {
+                        Text(subtitle)
+                            .font(GraphTableConstants.subtitleFont)
+                            .italic()
+                            .foregroundColor(Color.headerButtonSubtitle)
+                            .lineLimit(1)
+                    }
+                }
+
+                if header.isDropdown {
+                    Image(systemName: "chevron.down")
+                        .resizable()
+                        .foregroundColor(Color.text)
+                        .font(GraphTableConstants.subtitleFont)
+                        .frame(width: GraphTableConstants.headerIconWidth, height: GraphTableConstants.headerIconHeight)
+                }
+            }
+            .padding(.all, GraphTableConstants.smallPadding)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(header.isDropdown ? Color.headerBackround : Color.whiteBackground)
+            )
+
+            if alignment == .leading {
+                Spacer()
+            }
+        }
+        .padding(.vertical, GraphTableConstants.smallPadding)
+        .background(GeometryReader { proxy in
+            Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
+        })
+        .frame(width: width, height: maxCellHeight, alignment: alignment == .leading ? .leading : .trailing)
+    }
+
+    @ViewBuilder
+    private func columnView(items: [TableItem], alignment: HorizontalAlignment, width: CGFloat? = nil) -> some View {
+        VStack(alignment: alignment, spacing: .zero) {
+            ForEach(items.indices, id: \.self) { idx in
+                let item = items[idx]
+                HStack(spacing: .zero) {
+                    if alignment == .trailing {
+                        Spacer()
+                    }
+
+                    Text(item.title)
+                        .font(GraphTableConstants.titleFont)
+                        .lineLimit(1)
+                        .foregroundStyle(item.color)
+                        .padding(.horizontal, GraphTableConstants.smallPadding)
+                        .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
+                        .background(GeometryReader { proxy in
+                            Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
+                        })
+
+                    if alignment == .leading {
+                        Spacer()
+                    }
+                }
+                .frame(height: maxCellHeight)
+
+                if idx != items.count - 1 {
+                    Divider().background(Color.secondary.opacity(0.1))
+                }
+            }
+        }
+        .frame(width: width)
+    }
+
+    private func getColumnWidth(index: Int) -> CGFloat {
+        store.columnsWidth[safe: index] ?? GraphTableConstants.defaultColumnWidth
+    }
+}
+
+// safe index
+extension Collection {
+    subscript(safe index: Index) -> Element? { indices.contains(index) ? self[index] : nil }
 }
