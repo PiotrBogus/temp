@@ -1,112 +1,109 @@
-import ComposableArchitecture
-import Foundation
-import GenieCommonPresentation
+import UIKit
+import SwiftUI
 
-// MARK: - Global constants shared between View and Reducer
-public enum GraphTableConstants {
-    public static let headerInnerPadding: CGFloat = 4
-    public static let headerImagePadding: CGFloat = 4
-    public static let headerIconWidth: CGFloat = 12
-    public static let cellHorizontalPadding: CGFloat = 8
-}
+/// Prosty, szybki kalkulator szerokości tekstu (jedna linia).
+public enum TextWidthCalculator {
+    private static let cache = NSCache<NSString, NSNumber>()
 
-// MARK: - Reducer
-@Reducer
-public struct GraphTableFeature: Sendable {
-    public init() {}
+    /// Mierzy szerokość podanego tekstu (jedna linia) przy użyciu UIFont i opcjonalnych atrybutów.
+    /// - Parameters:
+    ///   - text: tekst do zmierzenia
+    ///   - font: UIFont użyty do renderowania
+    ///   - attributes: dodatkowe atrybuty NSAttributedString.Key (np. kern), opcjonalne
+    ///   - useCache: czy użyć prostego cache (default true)
+    /// - Returns: szerokość w punktach (CGFloat), zaokrąglona w górę (ceil)
+    public static func width(
+        for text: String,
+        font: UIFont,
+        attributes: [NSAttributedString.Key: Any]? = nil,
+        useCache: Bool = true
+    ) -> CGFloat {
+        guard !text.isEmpty else { return 0 }
 
-    @ObservableState
-    public struct State: Equatable, Sendable {
-        public enum ContentViewState: Equatable, Sendable {
-            case loader
-            case table
-        }
-
-        var contentViewState: ContentViewState = .loader
-        var tableTitle: String = "Patient Share/US/Entresto"
-        var filters: [GraphTableFilter] = GraphTableFilter.mock
-        var columns: [TableColumn] = TableColumn.mock
-        var columnsWidth: [CGFloat] = []
-
-        public init() {}
-    }
-
-    public enum Action: Sendable {
-        case onAppear
-        case didCalculateColumnsWidth([CGFloat])
-    }
-
-    public var body: some Reducer<State, Action> {
-        Reduce { state, action in
-            switch action {
-            case .onAppear:
-                return calculateColumnsWidth(columns: state.columns)
-
-            case let .didCalculateColumnsWidth(widths):
-                state.columnsWidth = widths
-                state.contentViewState = .table
-                return .none
-            }
-        }
-    }
-}
-
-// MARK: - Column width calculation logic
-private extension GraphTableFeature {
-    func calculateColumnsWidth(columns: [TableColumn]) -> Effect<Action> {
-        .run { send in
-            let widths = await computeAllColumnWidths(columns)
-            await send(.didCalculateColumnsWidth(widths))
-        }
-    }
-
-    /// Oblicza szerokości wszystkich kolumn równolegle
-    private func computeAllColumnWidths(_ columns: [TableColumn]) async -> [CGFloat] {
-        await withTaskGroup(of: (CGFloat, Int).self) { group -> [(CGFloat, Int)] in
-            for (index, column) in columns.enumerated() {
-                group.addTask {
-                    let width = await computeSingleColumnWidth(column)
-                    return (width, index)
-                }
+        // Key dla cache — łączy tekst + font description + opcjonalne atrybuty ważne do pomiaru
+        if useCache {
+            let attrDesc = attributes?.map { "\($0.key.rawValue)=\($0.value)" }.joined(separator: "|") ?? ""
+            let cacheKey = "\(text)|font:\(font.fontName)-\(font.pointSize)|attrs:\(attrDesc)" as NSString
+            if let cached = cache.object(forKey: cacheKey) {
+                return CGFloat(truncating: cached)
             }
 
-            var results: [(CGFloat, Int)] = []
-            for await result in group { results.append(result) }
-
-            // sortowanie po indeksie (bo TaskGroup nie gwarantuje kolejności)
-            return results.sorted(by: { $0.1 < $1.1 }).map(\.0)
+            let computed = computeWidth(text: text, font: font, attributes: attributes)
+            cache.setObject(NSNumber(value: Double(computed)), forKey: cacheKey)
+            return computed
+        } else {
+            return computeWidth(text: text, font: font, attributes: attributes)
         }
     }
 
-    /// Oblicza szerokość pojedynczej kolumny na podstawie headera i itemów
-    private func computeSingleColumnWidth(_ column: TableColumn) async -> CGFloat {
-        async let headerWidth = computeHeaderWidth(column.header)
-        async let itemsWidth = computeItemsWidth(column.items)
+    /// Mierzy szerokość dla NSAttributedString (jedna linia).
+    public static func width(for attributed: NSAttributedString, useCache: Bool = false) -> CGFloat {
+        guard attributed.length > 0 else { return 0 }
 
-        let (hWidth, iWidth) = await (headerWidth, itemsWidth)
-        return max(hWidth, iWidth)
+        if useCache {
+            let cacheKey = "attr:\(attributed.string)|\(attributed.hash)" as NSString
+            if let cached = cache.object(forKey: cacheKey) {
+                return CGFloat(truncating: cached)
+            }
+            let size = attributed.size()
+            let w = ceil(size.width)
+            cache.setObject(NSNumber(value: Double(w)), forKey: cacheKey)
+            return w
+        } else {
+            return ceil(attributed.size().width)
+        }
     }
 
-    /// Liczy szerokość nagłówka kolumny, uwzględniając tytuł, podtytuł, ikonę i paddingi
-    private func computeHeaderWidth(_ header: TableHeader) async -> CGFloat {
-        var texts = [header.title]
-        if let subtitle = header.subtitle {
-            texts.append(subtitle)
-        }
-
-        let baseWidth = await ColumnWidthCalculator.maxWidth(for: texts, font: .footnote)
-
-        var adjusted = baseWidth + 2 * GraphTableConstants.headerInnerPadding
-        if header.isDropdown {
-            adjusted += GraphTableConstants.headerIconWidth + GraphTableConstants.headerImagePadding
-        }
-
-        return adjusted
+    /// Wersja wygodna dla SwiftUI Font — mapujemy do UIFont (ograniczona konwersja).
+    /// Jeśli potrzebujesz precyzyjnej konwersji, podaj bezpośrednio UIFont.
+    public static func width(
+        for text: String,
+        font: Font,
+        attributes: [NSAttributedString.Key: Any]? = nil,
+        useCache: Bool = true
+    ) -> CGFloat {
+        let uiFont = uiFont(from: font)
+        return width(for: text, font: uiFont, attributes: attributes, useCache: useCache)
     }
 
-    /// Liczy szerokość zawartości komórek kolumny
-    private func computeItemsWidth(_ items: [TableItem]) async -> CGFloat {
-        let baseWidth = await ColumnWidthCalculator.maxWidth(for: items.map(\.title), font: .footnote)
-        return baseWidth + 2 * GraphTableConstants.cellHorizontalPadding
+    // MARK: - Helpers
+
+    private static func computeWidth(text: String, font: UIFont, attributes: [NSAttributedString.Key: Any]?) -> CGFloat {
+        var attrs = attributes ?? [:]
+        attrs[.font] = font
+        // NSString API dla jednej linii — szybkie i dokładne
+        let ns = text as NSString
+        let size = ns.size(withAttributes: attrs)
+        return ceil(size.width)
+    }
+
+    /// Prosta (przybliżona) konwersja SwiftUI Font -> UIFont
+    private static func uiFont(from font: Font) -> UIFont {
+        // Najczęstsze mappingi; rozszerz w razie potrzeby
+        switch font {
+        case .largeTitle:
+            return UIFont.preferredFont(forTextStyle: .largeTitle)
+        case .title:
+            return UIFont.preferredFont(forTextStyle: .title1)
+        case .title2:
+            return UIFont.preferredFont(forTextStyle: .title2)
+        case .title3:
+            return UIFont.preferredFont(forTextStyle: .title3)
+        case .headline:
+            return UIFont.preferredFont(forTextStyle: .headline)
+        case .subheadline:
+            return UIFont.preferredFont(forTextStyle: .subheadline)
+        case .callout:
+            return UIFont.preferredFont(forTextStyle: .callout)
+        case .caption:
+            return UIFont.preferredFont(forTextStyle: .caption1)
+        case .caption2:
+            return UIFont.preferredFont(forTextStyle: .caption2)
+        case .footnote:
+            return UIFont.preferredFont(forTextStyle: .footnote)
+        default:
+            // fallback: body
+            return UIFont.preferredFont(forTextStyle: .body)
+        }
     }
 }
