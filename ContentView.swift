@@ -1,7 +1,1 @@
-@objc(IKOBlueAndWhiteButtonOrder)
-enum IKOBlueAndWhiteButtonOrder: UInt {
-    case whiteFirst
-    case blueFirst
-    case horizontalWhiteFirst
-    case horizontalBlueFirst
-}
+@property(nonatomic, assign) enum IKOBlueAndWhiteButtonOrder order;
