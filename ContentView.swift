@@ -1,6 +1,7 @@
-typedef NS_ENUM(NSUInteger, IKOBlueAndWhiteButtonOrder) {
-    IKOBlueAndWhiteButtonOrderWhiteFirst,
-    IKOBlueAndWhiteButtonOrderBlueFirst,
-    IKOBlueAndWhiteButtonOrderHorizontalWhiteFirst,
-    IKOBlueAndWhiteButtonOrderHorizontalBlueFirst
-};
+@objc(IKOBlueAndWhiteButtonOrder)
+enum IKOBlueAndWhiteButtonOrder: UInt {
+    case whiteFirst
+    case blueFirst
+    case horizontalWhiteFirst
+    case horizontalBlueFirst
+}
