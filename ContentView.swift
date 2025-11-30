@@ -127,3 +127,41 @@ struct EsimActivationFeature {
         }
     }
 }
+
+
+
+import SwiftUI
+import ComposableArchitecture
+
+struct EsimActivationView: View {
+    @Bindable var store: StoreOf<EsimActivationFeature>
+
+    var body: some View {
+        VStack(spacing: 20) {
+
+            Text("Aktywacja eSIM")
+                .font(.title)
+
+            if store.isLoading {
+                ProgressView("Trwa aktywacja…")
+            }
+
+            if let error = store.errorMessage {
+                Text(error).foregroundColor(.red)
+            }
+
+            if store.isSuccess {
+                Text("eSIM został pomyślnie dodany!")
+                    .foregroundColor(.green)
+            }
+
+            Button("Aktywuj eSIM") {
+                store.send(.activateTapped)
+            }
+            .disabled(store.isLoading)
+            .buttonStyle(.borderedProminent)
+        }
+        .padding()
+    }
+}
+
