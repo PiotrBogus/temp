@@ -1,39 +1,129 @@
-public extension ColumnWidthCalculator {
-    static func symbolWidth(
-        for systemName: String,
-        font: Font,
-        weight: Font.Weight = .regular
-    ) async -> CGFloat {
+import Foundation
+import ComposableArchitecture
+import CoreTelephony
 
-        // 🔑 Klucz cache
-        let key = "symbol-\(systemName)-\(font.hashValue)"
+// MARK: - EsimActivationData
 
-        return await FontWidthCacheActor.shared.getOrCompute(key: key) {
-            Self.measureSymbolWidth(systemName: systemName, font: font, weight: weight)
+struct EsimActivationData: Equatable, Sendable {
+    let lpa: String
+    let smdpAddress: String
+    let activationCode: String
+    let iosActivationUrl: String
+    let confirmationCode: String
+    let carrierName: String
+    let planLabel: String
+}
+
+// MARK: - Dependency Client
+
+struct EsimProvisioningClient: DependencyKey {
+
+    var supportsEsim: @Sendable () -> Bool
+    var activate: @Sendable (EsimActivationData) async throws -> Bool
+
+    static let liveValue = Self(
+        supportsEsim: {
+            CTCellularPlanProvisioning().supportsCellularPlan()
+        },
+        activate: { data in
+            let provisioning = CTCellularPlanProvisioning()
+            let request = CTCellularPlanProvisioningRequest()
+            request.address = data.smdpAddress
+            request.matchingID = data.activationCode
+            request.confirmationCode = data.confirmationCode
+
+            return try await withCheckedThrowingContinuation { cont in
+                provisioning.addPlan(with: request) { result in
+                    switch result {
+                    case .success:
+                        cont.resume(returning: true)
+                    case .fail, .unknown:
+                        cont.resume(returning: false)
+                    @unknown default:
+                        cont.resume(throwing: NSError(domain: "esim", code: -1))
+                    }
+                }
+            }
         }
+    )
+}
+
+extension DependencyValues {
+    var esimClient: EsimProvisioningClient {
+        get { self[EsimProvisioningClient.self] }
+        set { self[EsimProvisioningClient.self] = newValue }
+    }
+}
+
+// MARK: - Reducer (TCA new style)
+
+@Reducer
+struct EsimActivationFeature {
+
+    // MARK: - State
+
+    @ObservableState
+    struct State: Equatable {
+        var data: EsimActivationData
+
+        var isLoading = false
+        var isSuccess = false
+        var errorMessage: String?
     }
 
-    private static func measureSymbolWidth(
-        systemName: String,
-        font: Font,
-        weight: Font.Weight
-    ) -> CGFloat {
+    // MARK: - Actions
 
-        let uiWeight = FontWeightMapper.uiWeight(weight: weight)
-        let uiFont = FontMapper.uiFont(font: font, uiWeight: uiWeight)
+    enum Action: Equatable, Sendable {
+        case activateTapped
+        case _checkSupport
+        case _activate
+        case activationResult(Bool)
+        case failed(String)
+    }
 
-        guard let image = UIImage(systemName: systemName)?.withRenderingMode(.alwaysTemplate) else {
-            return 0
+    // MARK: - Reducer
+
+    @Dependency(\.esimClient) var esimClient
+
+    var body: some ReducerOf<Self> {
+
+        Reduce { state, action in
+            switch action {
+
+            case .activateTapped:
+                state.isLoading = true
+                state.errorMessage = nil
+                state.isSuccess = false
+                return .send(._checkSupport)
+
+            case ._checkSupport:
+                if esimClient.supportsEsim() == false {
+                    return .send(.failed("Urządzenie nie obsługuje eSIM."))
+                }
+                return .send(._activate)
+
+            case ._activate:
+                return .run { [data = state.data] send in
+                    let result = try await esimClient.activate(data)
+                    await send(.activationResult(result))
+                } catch: { error, send in
+                    await send(.failed("Błąd aktywacji eSIM."))
+                }
+
+            case let .activationResult(success):
+                state.isLoading = false
+                state.isSuccess = success
+                if success == false {
+                    state.errorMessage = "Nie udało się aktywować eSIM."
+                }
+                return .none
+
+            case let .failed(message):
+                state.isLoading = false
+                state.isSuccess = false
+                state.errorMessage = message
+                return .none
+            }
         }
-
-        // ⚖️ Symbol jest skalowany przez UIFontMetrics
-        let metrics = UIFontMetrics(forTextStyle: .body)
-        let scaledFont = metrics.scaledFont(for: uiFont)
-
-        // Rozmiar symbolu zależy od font.pointSize
-        let config = UIImage.SymbolConfiguration(pointSize: scaledFont.pointSize, weight: uiWeight)
-        let scaledImage = image.applyingSymbolConfiguration(config) ?? image
-
-        return ceil(scaledImage.size.width)
     }
 }
