@@ -1,22 +1,23 @@
-   static func maxWidth(
-        for values: [String],
+    static func maxSymbolWidth(
+        for systemNames: [String],
         font: Font,
         weight: Font.Weight = .regular,
         maxWidth: CGFloat? = nil
     ) async -> CGFloat {
 
-        guard !values.isEmpty else { return 0 }
+        guard !systemNames.isEmpty else { return 0 }
 
-        // Parse font once (performance!)
+        // Parse SwiftUI font once
         let parsed = SwiftUIFontMapper.parse(font)
-        let uiFont = parsed.toUIFont()
+        let uiFont = parsed.toUIFont(weight: weight)
 
-        // Measure all values using cache
         var maxFound: CGFloat = 0
 
-        for text in values {
-            let w = await self.width(for: text, uiFont: uiFont)
+        for name in systemNames {
+            let w = await symbolWidth(for: name, uiFont: uiFont)
             if w > maxFound { maxFound = w }
+
+            // if max width reached, no need to measure further
             if let limit = maxWidth, maxFound >= limit {
                 return limit
             }
@@ -26,5 +27,33 @@
             return min(maxFound, limit)
         }
         return maxFound
+    }
+}
+
+
+    static func totalSymbolWidth(
+        for systemNames: [String],
+        font: Font,
+        weight: Font.Weight = .regular,
+        padding: CGFloat = 0
+    ) async -> CGFloat {
+
+        guard !systemNames.isEmpty else { return 0 }
+
+        // Parse SwiftUI font once
+        let parsedFont = SwiftUIFontMapper.parse(font)
+        let uiFont = parsedFont.toUIFont(weight: weight)
+
+        var total: CGFloat = 0
+
+        for (index, name) in systemNames.enumerated() {
+            let width = await symbolWidth(for: name, uiFont: uiFont)
+            total += width
+            if index < systemNames.count - 1 {
+                total += padding
+            }
+        }
+
+        return total
     }
 }
