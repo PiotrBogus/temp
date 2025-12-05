@@ -1,8 +1,28 @@
-    private func handleFeatureContition() -> Bool {
-        withCheckedContinuation { continuation in
-            let networkServiceProvider: BehavioralBiometricNetworkServiceProvider = IKOAssembler.resolver~>
-            let state = try? await networkServiceProvider.getBehavioralBiometricState()
-            let isDisabled = state?.enabled == false
-            continuation.resume(returning: isDisabled)
-        }
-    }
+import Foundation
+import UIKit
+import UIComponents
+
+@objc
+public protocol BehavioralBiometricObjectiveCNavigationProviding: NSObjectProtocol {
+    @MainActor @objc func presentDisableBehavioralBiometricSuccessScreen(
+        on viewController: UIViewController
+    )
+    @MainActor @objc func createBehavioralBiometricExplanationViewController(
+        isPrimaryButtonVisible: Bool
+    ) -> IKOBaseViewController
+    @MainActor @objc func pushBehavioralBiometricExplanationViewController(
+        on viewController: UIViewController,
+        isPrimaryButtonVisible: Bool
+    )
+    @MainActor @objc func createBehavioralBiometricAgreementsViewController() -> IKOBaseViewController
+    @MainActor @objc func pushBehavioralBiometricAgreementsViewController(
+        on viewController: UIViewController
+    )
+}
+
+
+
+- (void)performNavigateToBehavioralBiometricAgreements:(UIViewController *)controller  {
+    BehavioralBiometricObjectiveCNavigationProviding *navigationProvider = [IKOAssembler resolveBehavioralBiometricNavigationProvider];
+    [navigationProvider pushBehavioralBiometricAgreementsViewControllerOn:controller];
+}
