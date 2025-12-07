@@ -4,81 +4,78 @@ import ComposableArchitecture
 import UIComponents
 import XCTest
 
+// MARK: - Helper types
 
 private struct TestError: Error, Equatable {}
 
 private final class BehavioralBiometricStatusStoreMock: BehavioralBiometricStatusStoring {
-    nonisolated(unsafe) private var isEnabled: Bool = false
+    nonisolated(unsafe) var isEnabled: Bool = false
 
     func isBehavioralBiometricEnabledByUser() -> Bool {
         isEnabled
     }
-    
+
     func changeBehavioralBiometricStatus(isEnabled: Bool) {
         self.isEnabled = isEnabled
     }
 }
 
 private struct BehavioralBiometricNetworkServiceProviderMock: BehavioralBiometricNetworkServiceProviding {
-    var getAgreementsResult: Result<[BehavioralBiometricAgreement], Error>
 
+    var getAgreementsResult: Result<[BehavioralBiometricAgreement], Error> = .success([])
     func getBehavioralBiometricAgreements() async throws -> [BehavioralBiometricAgreement] {
-        switch getAgreementsResult {
-        case let .success(value): return value
-        case let .failure(error): throw error
-        }
+        try getAgreementsResult.get()
     }
 
-    var changeBehavioralBiometricStatusResult: Result<Void, Error>
-
+    var changeBehavioralBiometricStatusResult: Result<Void, Error> = .success(())
     func changeBehavioralBiometricStatus(isEnabled: Bool, mPin: any IKOCommon.IKOUIPin, agreements: [BehavioralBiometricAgreement]?) async throws {
-        switch changeBehavioralBiometricStatusResult {
-        case .success: return
-        case let .failure(error): throw error
-        }
+        try changeBehavioralBiometricStatusResult.get()
     }
 
-    var getBehavioralBiometricStateResult: Result<BehavioralBiometricState, Error>
-
+    var getBehavioralBiometricStateResult: Result<BehavioralBiometricState, Error> = .success(.init(enabled: true))
     func getBehavioralBiometricState() async throws -> BehavioralBiometricState {
-        switch getBehavioralBiometricStateResult {
-        case let .success(value): return value
-        case let .failure(error): throw error
-        }
+        try getBehavioralBiometricStateResult.get()
     }
 
-    var startSessionResult: Result<BehavioralBiometricStartSession, Error>
-
+    var startSessionResult: Result<BehavioralBiometricStartSession, Error> = .success(.init(sessionId: "id"))
     func startSession(latitude: String?, longitude: String?) async throws -> BehavioralBiometricStartSession {
-        switch startSessionResult {
-        case let .success(value): return value
-        case let .failure(error): throw error
-        }
+        try startSessionResult.get()
     }
 
-    var stopSessionResult: Result<Void, Error>
-
+    var stopSessionResult: Result<Void, Error> = .success(())
     func stopSession() async throws {
-        switch stopSessionResult {
-        case .success: return
-        case let .failure(error): throw error
-        }
+        try stopSessionResult.get()
     }
 }
 
-final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
-    func test_onAppear_loadAgreementsSuccess() async {
-        let agreements = [makeAgreement(id: "1", mandatory: false), makeAgreement(id: "2", mandatory: true)]
+// MARK: - Small helper
+private func makeAgreement(id: String, mandatory: Bool) -> BehavioralBiometricAgreement {
+    BehavioralBiometricAgreement(id: id, isMandatory: mandatory)
+}
 
-        let network = MockNetworkService(
-            getAgreementsResult: .success(agreements),
-            enableResult: .success(())
-        )
-        let status = MockStatusStorage()
+// MARK: - Tests
+
+final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
+
+    func test_onAppear_loadAgreementsSuccess() async {
+        let agreements = [
+            makeAgreement(id: "1", mandatory: false),
+            makeAgreement(id: "2", mandatory: true)
+        ]
+
+        var network = BehavioralBiometricNetworkServiceProviderMock()
+        network.getAgreementsResult = .success(agreements)
+
+        let status = BehavioralBiometricStatusStoreMock()
 
         let store = TestStore(
-            initialState: BehavioralBiometricAgreementsReducer.State(),
-            reducer: BehavioralBiometricAgreementsReducer(networkService: network, statusStorage: status)
+            initialState: .init(),
+            reducer: {
+                BehavioralBiometricAgreementsReducer(
+                    networkService: network,
+                    statusStorage: status
+                )
+            }
         )
 
         await store.send(.onAppear) {
@@ -86,21 +83,25 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
 
         await store.receive(.onDidLoadAgreements(agreements)) {
-            $0.isLoading = false
             $0.agreements = agreements
+            $0.isLoading = false
         }
     }
 
     func test_onAppear_loadAgreementsFailure_setsError() async {
-        let network = MockNetworkService(
-            getAgreementsResult: .failure(TestError()),
-            enableResult: .success(())
-        )
-        let status = MockStatusStorage()
+        var network = BehavioralBiometricNetworkServiceProviderMock()
+        network.getAgreementsResult = .failure(TestError())
+
+        let status = BehavioralBiometricStatusStoreMock()
 
         let store = TestStore(
-            initialState: BehavioralBiometricAgreementsReducer.State(),
-            reducer: BehavioralBiometricAgreementsReducer(networkService: network, statusStorage: status)
+            initialState: .init(),
+            reducer: {
+                BehavioralBiometricAgreementsReducer(
+                    networkService: network,
+                    statusStorage: status
+                )
+            }
         )
 
         await store.send(.onAppear) {
@@ -116,8 +117,8 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
 
     func test_onCheckAgreementsChanged_updatesIndexes() async {
         let store = TestStore(
-            initialState: BehavioralBiometricAgreementsReducer.State(),
-            reducer: BehavioralBiometricAgreementsReducer()
+            initialState: .init(),
+            reducer: { BehavioralBiometricAgreementsReducer() }
         )
 
         await store.send(.onCheckAgreementsChanged([0, 2])) {
@@ -125,15 +126,16 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    func test_onPrimaryButtonTap_validatesAndReturnsMissingMandatoryIds() async {
+    func test_onPrimaryButtonTap_validatesMissingMandatory() async {
         let agreements = [
             makeAgreement(id: "A", mandatory: true),
             makeAgreement(id: "B", mandatory: false),
             makeAgreement(id: "C", mandatory: true)
         ]
+
         let store = TestStore(
             initialState: .init(agreements: agreements),
-            reducer: BehavioralBiometricAgreementsReducer()
+            reducer: { BehavioralBiometricAgreementsReducer() }
         )
 
         await store.send(.onPrimaryButtonTap)
@@ -143,14 +145,18 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    func test_onPrimaryButtonTap_allMandatorySelected_navigatesToMpin() async {
+    func test_onPrimaryButtonTap_allMandatorySelected_navigatesToMPin() async {
         let agreements = [
             makeAgreement(id: "A", mandatory: true),
             makeAgreement(id: "B", mandatory: false)
         ]
+
         let store = TestStore(
-            initialState: .init(agreements: agreements, checkedAgreemntsIndexes: [0]),
-            reducer: BehavioralBiometricAgreementsReducer()
+            initialState: .init(
+                agreements: agreements,
+                checkedAgreemntsIndexes: [0]
+            ),
+            reducer: { BehavioralBiometricAgreementsReducer() }
         )
 
         await store.send(.onPrimaryButtonTap)
@@ -160,19 +166,31 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    func test_onReceiveMPin_enableBehavioralBiometricSuccess_setsDestinationAndStatus() async {
+    func test_onReceiveMPin_enableSuccess() async {
         let agreements = [ makeAgreement(id: "A", mandatory: false) ]
-        let network = MockNetworkService(getAgreementsResult: .success(agreements), enableResult: .success(()))
-        let status = MockStatusStorage()
+
+        var network = BehavioralBiometricNetworkServiceProviderMock()
+        network.getAgreementsResult = .success(agreements)
+        network.changeBehavioralBiometricStatusResult = .success(())
+
+        let status = BehavioralBiometricStatusStoreMock()
 
         let store = TestStore(
-            initialState: .init(agreements: agreements, checkedAgreemntsIndexes: [0]),
-            reducer: BehavioralBiometricAgreementsReducer(networkService: network, statusStorage: status)
+            initialState: .init(
+                agreements: agreements,
+                checkedAgreemntsIndexes: [0]
+            ),
+            reducer: {
+                BehavioralBiometricAgreementsReducer(
+                    networkService: network,
+                    statusStorage: status
+                )
+            }
         )
 
-        let mpin = IKOUIPin(pin: "1234")
+        let pin = IKOUIPin(pin: "1234")
 
-        await store.send(.onReceiveMPin(mpin)) {
+        await store.send(.onReceiveMPin(pin)) {
             $0.isLoading = true
         }
 
@@ -181,21 +199,33 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
             $0.destination = .enabledBehavioralBiometricSuccess
         }
 
-        XCTAssertEqual(status.lastValue, true)
+        XCTAssertEqual(status.isEnabled, true)
     }
 
-    func test_onReceiveMPin_enableBehavioralBiometricFailure_setsError() async {
+    func test_onReceiveMPin_enableFailure_setsError() async {
         let agreements = [ makeAgreement(id: "A", mandatory: false) ]
-        let network = MockNetworkService(getAgreementsResult: .success(agreements), enableResult: .failure(TestError()))
-        let status = MockStatusStorage()
+
+        var network = BehavioralBiometricNetworkServiceProviderMock()
+        network.changeBehavioralBiometricStatusResult = .failure(TestError())
+
+        let status = BehavioralBiometricStatusStoreMock()
 
         let store = TestStore(
-            initialState: .init(agreements: agreements, checkedAgreemntsIndexes: [0]),
-            reducer: BehavioralBiometricAgreementsReducer(networkService: network, statusStorage: status)
+            initialState: .init(
+                agreements: agreements,
+                checkedAgreemntsIndexes: [0]
+            ),
+            reducer: {
+                BehavioralBiometricAgreementsReducer(
+                    networkService: network,
+                    statusStorage: status
+                )
+            }
         )
 
-        let mpin = IKOUIPin(pin: "1234")
-        await store.send(.onReceiveMPin(mpin)) {
+        let pin = IKOUIPin(pin: "1234")
+
+        await store.send(.onReceiveMPin(pin)) {
             $0.isLoading = true
         }
 
@@ -206,8 +236,11 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    func test_onMoreInformationTap_setsDestinationMoreInfo() async {
-        let store = TestStore(initialState: .init(), reducer: BehavioralBiometricAgreementsReducer())
+    func test_onMoreInformationTap_setsDestination() async {
+        let store = TestStore(
+            initialState: .init(),
+            reducer: { BehavioralBiometricAgreementsReducer() }
+        )
 
         await store.send(.onMoreInformationTap) {
             $0.destination = .moreInfo
@@ -215,18 +248,22 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
     }
 
     func test_onResetNavigation_clearsDestination() async {
-        var state = BehavioralBiometricAgreementsReducer.State()
-        state.destination = .moreInfo
-
-        let store = TestStore(initialState: state, reducer: BehavioralBiometricAgreementsReducer())
+        let store = TestStore(
+            initialState: .init(destination: .moreInfo),
+            reducer: { BehavioralBiometricAgreementsReducer() }
+        )
 
         await store.send(.onResetNavigation) {
             $0.destination = nil
         }
     }
 
-    func test_onAgreementsUpdated_setsDidUpdateAgreements() async {
-        let store = TestStore(initialState: .init(), reducer: BehavioralBiometricAgreementsReducer())
+    func test_onAgreementsUpdated_setsFlag() async {
+        let store = TestStore(
+            initialState: .init(),
+            reducer: { BehavioralBiometricAgreementsReducer() }
+        )
+
         await store.send(.onAgreementsUpdated) {
             $0.didUpdateAgreements = true
         }
@@ -234,13 +271,21 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
 
     func test_onTryAgain_afterAgreementsError_reloads() async {
         let agreements = [ makeAgreement(id: "A", mandatory: false) ]
-        let network = MockNetworkService(getAgreementsResult: .success(agreements), enableResult: .success(()))
-        let status = MockStatusStorage()
 
-        var state = BehavioralBiometricAgreementsReducer.State()
-        state.errorType = .agreements
+        var network = BehavioralBiometricNetworkServiceProviderMock()
+        network.getAgreementsResult = .success(agreements)
 
-        let store = TestStore(initialState: state, reducer: BehavioralBiometricAgreementsReducer(networkService: network, statusStorage: status))
+        let status = BehavioralBiometricStatusStoreMock()
+
+        let store = TestStore(
+            initialState: .init(errorType: .agreements),
+            reducer: {
+                BehavioralBiometricAgreementsReducer(
+                    networkService: network,
+                    statusStorage: status
+                )
+            }
+        )
 
         await store.send(.onTryAgain) {
             $0.isLoading = true
@@ -252,19 +297,23 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    func test_onTryAgain_afterEnableError_navigatesToMPin() async {
-        var state = BehavioralBiometricAgreementsReducer.State()
-        state.errorType = .enableBehavioralBiometric
-
-        let store = TestStore(initialState: state, reducer: BehavioralBiometricAgreementsReducer())
+    func test_onTryAgain_enableError_navigatesToMPin() async {
+        let store = TestStore(
+            initialState: .init(errorType: .enableBehavioralBiometric),
+            reducer: { BehavioralBiometricAgreementsReducer() }
+        )
 
         await store.send(.onTryAgain) {
             $0.destination = .mPinBottomSheet
         }
     }
 
-    func test_onError_setsDestinationError() async {
-        let store = TestStore(initialState: .init(), reducer: BehavioralBiometricAgreementsReducer())
+    func test_onError_setsProperState() async {
+        let store = TestStore(
+            initialState: .init(),
+            reducer: { BehavioralBiometricAgreementsReducer() }
+        )
+
         await store.send(.onError(.agreements)) {
             $0.isLoading = false
             $0.errorType = .agreements
