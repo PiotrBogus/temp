@@ -1,22 +1,26 @@
-// BehavioralBiometricAgreementsReducerTests.swift
-import XCTest
+import BehavioralBiometricLogger
+@testable import BehavioralBiometric
 import ComposableArchitecture
-@testable import YourAppModule // <- Zmień na moduł, w którym znajduje się reducer
+import UIComponents
+import XCTest
 
-// MARK: - Test helpers / Mocks
 
-fileprivate struct TestError: Error, Equatable {}
+private struct TestError: Error, Equatable {}
 
-fileprivate final class MockStatusStorage: BehavioralBiometricStatusStoring {
-    private(set) var lastValue: Bool?
+private final class BehavioralBiometricStatusStoreMock: BehavioralBiometricStatusStoring {
+    nonisolated(unsafe) private var isEnabled: Bool = false
+
+    func isBehavioralBiometricEnabledByUser() -> Bool {
+        isEnabled
+    }
+    
     func changeBehavioralBiometricStatus(isEnabled: Bool) {
-        lastValue = isEnabled
+        self.isEnabled = isEnabled
     }
 }
 
-fileprivate struct MockNetworkService: BehavioralBiometricNetworkServiceProviding {
+private struct BehavioralBiometricNetworkServiceProviderMock: BehavioralBiometricNetworkServiceProviding {
     var getAgreementsResult: Result<[BehavioralBiometricAgreement], Error>
-    var enableResult: Result<Void, Error>
 
     func getBehavioralBiometricAgreements() async throws -> [BehavioralBiometricAgreement] {
         switch getAgreementsResult {
@@ -25,26 +29,44 @@ fileprivate struct MockNetworkService: BehavioralBiometricNetworkServiceProvidin
         }
     }
 
-    func changeBehavioralBiometricStatus(isEnabled: Bool, mPin: IKOUIPin, agreements: [BehavioralBiometricAgreement]) async throws {
-        switch enableResult {
+    var changeBehavioralBiometricStatusResult: Result<Void, Error>
+
+    func changeBehavioralBiometricStatus(isEnabled: Bool, mPin: any IKOCommon.IKOUIPin, agreements: [BehavioralBiometricAgreement]?) async throws {
+        switch changeBehavioralBiometricStatusResult {
+        case .success: return
+        case let .failure(error): throw error
+        }
+    }
+
+    var getBehavioralBiometricStateResult: Result<BehavioralBiometricState, Error>
+
+    func getBehavioralBiometricState() async throws -> BehavioralBiometricState {
+        switch getBehavioralBiometricStateResult {
+        case let .success(value): return value
+        case let .failure(error): throw error
+        }
+    }
+
+    var startSessionResult: Result<BehavioralBiometricStartSession, Error>
+
+    func startSession(latitude: String?, longitude: String?) async throws -> BehavioralBiometricStartSession {
+        switch startSessionResult {
+        case let .success(value): return value
+        case let .failure(error): throw error
+        }
+    }
+
+    var stopSessionResult: Result<Void, Error>
+
+    func stopSession() async throws {
+        switch stopSessionResult {
         case .success: return
         case let .failure(error): throw error
         }
     }
 }
 
-// Convenience builder for agreements used repeatedly in tests
-fileprivate func makeAgreement(id: String, mandatory: Bool) -> BehavioralBiometricAgreement {
-    // If BehavioralBiometricAgreement has more fields in your project, adapt accordingly.
-    BehavioralBiometricAgreement(id: id, isMandatory: mandatory)
-}
-
-// If IKOUIPin isn't accessible in tests, you can create a minimal shim in test target.
-// But prefer using actual IKOUIPin from your app. Here we assume initializer `IKOUIPin(pin:)` exists.
-
 final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
-
-    // MARK: - Load agreements success
     func test_onAppear_loadAgreementsSuccess() async {
         let agreements = [makeAgreement(id: "1", mandatory: false), makeAgreement(id: "2", mandatory: true)]
 
@@ -69,7 +91,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    // MARK: - Load agreements failure
     func test_onAppear_loadAgreementsFailure_setsError() async {
         let network = MockNetworkService(
             getAgreementsResult: .failure(TestError()),
@@ -93,7 +114,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    // MARK: - onCheckAgreementsChanged simple state update
     func test_onCheckAgreementsChanged_updatesIndexes() async {
         let store = TestStore(
             initialState: BehavioralBiometricAgreementsReducer.State(),
@@ -105,7 +125,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    // MARK: - validate mandatory returns missing ids
     func test_onPrimaryButtonTap_validatesAndReturnsMissingMandatoryIds() async {
         let agreements = [
             makeAgreement(id: "A", mandatory: true),
@@ -124,7 +143,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    // MARK: - validate mandatory all selected navigates to mPin
     func test_onPrimaryButtonTap_allMandatorySelected_navigatesToMpin() async {
         let agreements = [
             makeAgreement(id: "A", mandatory: true),
@@ -142,7 +160,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    // MARK: - enable behavioral biometric success
     func test_onReceiveMPin_enableBehavioralBiometricSuccess_setsDestinationAndStatus() async {
         let agreements = [ makeAgreement(id: "A", mandatory: false) ]
         let network = MockNetworkService(getAgreementsResult: .success(agreements), enableResult: .success(()))
@@ -153,7 +170,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
             reducer: BehavioralBiometricAgreementsReducer(networkService: network, statusStorage: status)
         )
 
-        // Use real IKOUIPin from project. Here we assume `IKOUIPin(pin:)` initializer exists.
         let mpin = IKOUIPin(pin: "1234")
 
         await store.send(.onReceiveMPin(mpin)) {
@@ -168,7 +184,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         XCTAssertEqual(status.lastValue, true)
     }
 
-    // MARK: - enable behavioral biometric failure
     func test_onReceiveMPin_enableBehavioralBiometricFailure_setsError() async {
         let agreements = [ makeAgreement(id: "A", mandatory: false) ]
         let network = MockNetworkService(getAgreementsResult: .success(agreements), enableResult: .failure(TestError()))
@@ -191,7 +206,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    // MARK: - onMoreInformationTap sets destination
     func test_onMoreInformationTap_setsDestinationMoreInfo() async {
         let store = TestStore(initialState: .init(), reducer: BehavioralBiometricAgreementsReducer())
 
@@ -200,7 +214,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    // MARK: - onResetNavigation clears destination
     func test_onResetNavigation_clearsDestination() async {
         var state = BehavioralBiometricAgreementsReducer.State()
         state.destination = .moreInfo
@@ -212,7 +225,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    // MARK: - onAgreementsUpdated sets flag
     func test_onAgreementsUpdated_setsDidUpdateAgreements() async {
         let store = TestStore(initialState: .init(), reducer: BehavioralBiometricAgreementsReducer())
         await store.send(.onAgreementsUpdated) {
@@ -220,7 +232,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    // MARK: - onTryAgain when errorType == .agreements triggers reload
     func test_onTryAgain_afterAgreementsError_reloads() async {
         let agreements = [ makeAgreement(id: "A", mandatory: false) ]
         let network = MockNetworkService(getAgreementsResult: .success(agreements), enableResult: .success(()))
@@ -241,7 +252,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    // MARK: - onTryAgain when errorType == .enableBehavioralBiometric navigates to mPin
     func test_onTryAgain_afterEnableError_navigatesToMPin() async {
         var state = BehavioralBiometricAgreementsReducer.State()
         state.errorType = .enableBehavioralBiometric
@@ -253,7 +263,6 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    // MARK: - onError sets errorType and destination .error
     func test_onError_setsDestinationError() async {
         let store = TestStore(initialState: .init(), reducer: BehavioralBiometricAgreementsReducer())
         await store.send(.onError(.agreements)) {
