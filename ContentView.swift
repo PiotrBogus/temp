@@ -1,122 +1,180 @@
 import ComposableArchitecture
-import DesignSystemSwiftUI
-import Labels
-import SwiftUI
+import UIKit
+import CoreTelephony
+import Foundation
 
-struct ESimActivationView: View {
-    private struct Constants {
-        static let progressViewScaleSize: CGFloat = 1.6
-        static let checkESimTitleFont: UIFont.Style = .regular(.size18LS22)
-        static let checkESimSubtitleFont: UIFont.Style = .regular(.size18LS22)
-        static let commonPadding: CGFloat = 16
-        static let mediumPadding: CGFloat = 8
-        static let smallPadding: CGFloat = 4
-        static let titleLabelGroupFont: UIFont.Style = .regular(.size14LS18)
-        static let descriptionLabelGroupFont: UIFont.Style = .regular(.size14LS18)
+@Reducer
+struct ESimActivationReducer {
+    @ObservableState
+    struct State: Sendable {
+        var destination: Destination?
+        let data: ESimActivationData
+        var isLoading = true
+        var isSystemConfiguratorAvailable = false
+        var currentNumberOfInstalledSims: Int = 0
     }
 
-    let store: StoreOf<ESimActivationReducer>
-
-    var body: some View {
-        ZStack {
-            Color(uiColor: .ikoBlue0)
-
-            if store.isLoading {
-                checkESimAvailabilityView
-            } else {
-                manualAddESimView
-            }
-        }
+    @CasePathable
+    enum Action: Sendable {
+        case onAppear
+        case onNumberSimInstalled(Int)
+        case onActivationSuccess
+        case onManualESimAdd
+        case onOpenSystemConfigurator
+        case onESimNotSupported
+        case onCopyTap(String)
+        case onDeviceSettingTap
+        case onAppDidBecomeActive
     }
 
-    private var checkESimAvailabilityView: some View {
-        VStack(spacing: .zero) {
-            Spacer()
-
-            ProgressView()
-                  .progressViewStyle(CircularProgressViewStyle())
-                  .scaleEffect(Constants.progressViewScaleSize)
-                  .tint(Color(uiColor: .ikoGray140))
-
-            AttributedText(.labels.ESim_InstallSplash_lbl_Title.localized)
-                .fontStyle(Constants.checkESimTitleFont)
-                .padding(.top, Constants.commonPadding)
-
-            AttributedText(.labels.ESim_InstallSplash_lbl_Description.localized)
-                .fontStyle(Constants.checkESimSubtitleFont)
-                .padding(.top, Constants.mediumPadding)
-
-            Spacer()
-        }
+    @CasePathable
+    enum Destination: Sendable {
+        case esimNotSupported
+        case activationSuccess
+        case eSimPhoneSettings
+        case activation(String)
     }
 
-    private var manualAddESimView: some View {
-        VStack(spacing: Constants.commonPadding) {
-            ContentMessage(
-                model: .init(
-                    icon: .hint,
-                    subtitle: .labels.ESim_InstallDetails_lbl_ContentMessage.localized
-                )
-            )
+    let eSimManager: ESimProvisioningManaging
 
-            labelsGroup(
-                title: .labels.ESim_InstallDetails_lbl_TariffName.localized,
-                description: "\(store.data.carrierName) - \(store.data.planLabel)",
-                isCopyButtonVisible: false
-            )
-
-            labelsGroup(
-                title: .labels.ESim_InstallDetails_lbl_SimNumber.localized,
-                description: store.data.cardNumber,
-                isCopyButtonVisible: false
-            )
-
-            labelsGroup(
-                title: .labels.ESim_InstallDetails_lbl_ActivationCode.localized,
-                description: store.data.activationCode,
-                isCopyButtonVisible: true
-            )
-
-            labelsGroup(
-                title: .labels.ESim_InstallDetails_lbl_AddressSMDP.localized,
-                description: store.data.smdpAddress,
-                isCopyButtonVisible: true
-            )
-
-            Spacer()
-
-            PrimaryButton(title: .labels.ESim_Install_btn_DeviceSettings.localized) {
-                store.send(.onDeviceSettingTap)
-            }
-        }
-        .padding(Constants.commonPadding)
+    init(eSimManager: ESimProvisioningManaging) {
+        self.eSimManager = eSimManager
     }
 
-    private func labelsGroup(
-        title: String,
-        description: String,
-        isCopyButtonVisible: Bool
-    ) -> some View {
-        HStack(alignment: .top, spacing: .zero) {
-            VStack(alignment: .leading, spacing: Constants.smallPadding) {
-                AttributedText(title)
-                    .fontStyle(Constants.titleLabelGroupFont)
+    var body: some ReducerOf<Self> {
+        Reduce { state, action in
+            switch action {
+            case .onAppear:
+                return updateNumberOfInstalledSims()
 
-                AttributedText(description)
-                    .fontStyle(Constants.descriptionLabelGroupFont)
-            }
+            case let .onNumberSimInstalled(simsCount):
+                state.currentNumberOfInstalledSims = simsCount
+                return checkESimAvailability(configuratorLink: state.data.iosActivationUrl)
 
-            Spacer(minLength: Constants.smallPadding)
+            case .onESimNotSupported:
+                state.destination = .esimNotSupported
+                return .none
 
-            if isCopyButtonVisible {
-                Button(action: {
-                    store.send(.onCopyTap(description))
-                }) {
-                    AttributedText(.labels.ESim_InstallDetails_btn_Copy.localized)
-                        .fontStyle(Constants.titleLabelGroupFont)
-                        .textColor(.ikoBlue100)
+            case .onActivationSuccess:
+                state.destination = .activationSuccess
+                return .none
+
+            case .onManualESimAdd:
+                state.isLoading = false
+                return .none
+
+            case .onOpenSystemConfigurator:
+                state.isSystemConfiguratorAvailable = true
+                state.isLoading = false
+                state.destination = .activation(state.data.iosActivationUrl)
+                return .none
+
+            case let .onCopyTap(text):
+                UIPasteboard.general.string = text
+                return .none
+
+            case .onDeviceSettingTap:
+                if state.isSystemConfiguratorAvailable {
+                    state.destination = .activation(state.data.iosActivationUrl)
+                } else {
+                    state.destination = .eSimPhoneSettings
                 }
+                return .none
+
+            case .onAppDidBecomeActive:
+                if state.currentNumberOfInstalledSims < eSimManager.numberOfAvailableSims() {
+                    state.destination = .activationSuccess
+                }
+                return .none
             }
         }
     }
+
+    func checkESimAvailability(configuratorLink: String) -> Effect<Action> {
+        .run { send in
+            if await eSimManager.isESimSupportedByDevice() {
+                if await eSimManager.isSystemESimConfiguratorAvailable(configuratorLink: configuratorLink) {
+                    await send(.onOpenSystemConfigurator)
+                } else {
+                    await send(.onManualESimAdd)
+                }
+            } else {
+                await send(.onESimNotSupported)
+            }
+        }
+    }
+
+    func updateNumberOfInstalledSims() -> Effect<Action> {
+        .run { send in
+            let simsCount = eSimManager.numberOfAvailableSims()
+            await send(.onNumberSimInstalled(simsCount))
+        }
+    }
+}
+
+
+
+import CoreTelephony
+import UIKit
+
+protocol ESimProvisioningManaging: Sendable {
+    @MainActor func isESimSupportedByDevice() -> Bool
+    @MainActor func isSystemESimConfiguratorAvailable(configuratorLink: String) -> Bool
+    func numberOfAvailableSims() -> Int
+}
+
+final class ESimProvisioningManager: ESimProvisioningManaging {
+    func numberOfAvailableSims() -> Int {
+        let info = CTTelephonyNetworkInfo()
+        let numberOfProviders = info.serviceCurrentRadioAccessTechnology?.keys.count ?? 0
+        return numberOfProviders
+    }
+    
+    @MainActor func isSystemESimConfiguratorAvailable(configuratorLink: String) -> Bool {
+        guard let url = URL(string: configuratorLink) else { return false }
+        return UIApplication.shared.canOpenURL(url)
+    }
+
+    @MainActor func isESimSupportedByDevice() -> Bool {
+        isESimOnlyDevice() || isDualSimDevice() || containsMobileDataSettings()
+    }
+
+    @MainActor private func containsMobileDataSettings() -> Bool {
+        if let url = URL(string: "App-Prefs:root=MOBILE_DATA_SETTINGS_ID") {
+            return UIApplication.shared.canOpenURL(url)
+        } else {
+            return false
+        }
+    }
+
+    private func isESimOnlyDevice() -> Bool {
+        let services = CTTelephonyNetworkInfo().dataServiceIdentifier
+
+        if services == nil || services?.isEmpty == true {
+            return true
+        } else {
+            return false
+        }
+    }
+
+    private func isDualSimDevice() -> Bool {
+        if let radioAccesses = CTTelephonyNetworkInfo().serviceCurrentRadioAccessTechnology {
+            return radioAccesses.count > 1
+        } else {
+            return false
+        }
+    }
+}
+
+
+
+struct ESimActivationData: Equatable, Sendable {
+    let lpa: String
+    let smdpAddress: String
+    let activationCode: String
+    let iosActivationUrl: String
+    let confirmationCode: String
+    let carrierName: String
+    let planLabel: String
+    let cardNumber: String
 }
