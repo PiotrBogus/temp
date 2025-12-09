@@ -41,7 +41,7 @@ final class ESimActivationReducerTests: XCTestCase {
         )
         
         await store.send(.onAppear)
-        await store.receive(.onNumberSimInstalled(2)) {
+        await store.receive(\.onNumberSimInstalled, 2) {
             $0.currentNumberOfInstalledSims = 2
         }
     }
@@ -61,7 +61,7 @@ final class ESimActivationReducerTests: XCTestCase {
         await store.send(.onNumberSimInstalled(1)) {
             $0.currentNumberOfInstalledSims = 1
         }
-        await store.receive(.onOpenSystemConfigurator) {
+        await store.receive(\.onOpenSystemConfigurator) {
             $0.isSystemConfiguratorAvailable = true
             $0.isLoading = false
             $0.destination = .activation("https://test.esim.com/activate")
@@ -81,7 +81,7 @@ final class ESimActivationReducerTests: XCTestCase {
         await store.send(.onNumberSimInstalled(1)) {
             $0.currentNumberOfInstalledSims = 1
         }
-        await store.receive(.onManualESimAdd) {
+        await store.receive(\.onManualESimAdd) {
             $0.isLoading = false
         }
     }
@@ -98,7 +98,7 @@ final class ESimActivationReducerTests: XCTestCase {
         await store.send(.onNumberSimInstalled(0)) {
             $0.currentNumberOfInstalledSims = 0
         }
-        await store.receive(.onESimNotSupported) {
+        await store.receive(\.onESimNotSupported) {
             $0.destination = .esimNotSupported
         }
     }
