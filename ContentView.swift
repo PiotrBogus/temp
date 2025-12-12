@@ -45,7 +45,6 @@ struct ToolbarFilters<T: Equatable & Sendable>: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
-
     }
 }
 
@@ -95,21 +94,7 @@ struct FilterPill: View {
         .sheet(isPresented: $showingModal) {
             if let dim = dimension {
                 ChartTableFilterModalView(filter: dim) { updated in
-                    // Update local selectedId for single-select, and notify via onSelect for single-select
-                    if !updated.allowsMultiselect {
-                        if let first = updated.selectedOptions.first {
-                            selectedId = first.id
-                            onSelect?(first)
-                        } else {
-                            // No selection
-                            selectedId = updated.options.first?.id ?? 0
-                        }
-                    } else {
-                        // For multiselect, keep selectedId consistent with first selected option if any
-                        if let first = updated.selectedOptions.first {
-                            selectedId = first.id
-                        }
-                    }
+                    handleFilterUpdate(updated)
                 }
             } else {
                 EmptyView()
@@ -118,6 +103,37 @@ struct FilterPill: View {
         .onChange(of: dimension?.selectedOptions) { _, new in
             if let new = new, let firstId = new.first?.id {
                 selectedId = firstId
+            }
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func handleFilterUpdate(_ updated: GenieCommonDomain.Dimension) {
+        if !updated.allowsMultiselect {
+            // Single select: notify via onSelect for the selected option
+            if let first = updated.selectedOptions.first {
+                selectedId = first.id
+                onSelect?(first)
+            } else {
+                // No selection - use first available option
+                if let firstOption = updated.options.first {
+                    selectedId = firstOption.id
+                    onSelect?(firstOption)
+                }
+            }
+        } else {
+            // Multiselect: notify for each selected option
+            // This ensures all selections are communicated to the parent
+            for selectedOption in updated.selectedOptions {
+                onSelect?(selectedOption)
+            }
+            
+            // Update local selectedId to first selected option
+            if let first = updated.selectedOptions.first {
+                selectedId = first.id
+            } else if let firstOption = updated.options.first {
+                selectedId = firstOption.id
             }
         }
     }
