@@ -1,508 +1,275 @@
-import Foundation
-import GenieApi
+import ComposableArchitecture
+import GenieCommonData
 import GenieCommonDomain
+import SwiftUI
 
-private let defaultMaxSelectableOptions = 20
+// Convenience typealiases for specific ChartContainerFeature types
+typealias ToolbarFiltersWithStrings = ToolbarFilters<String>
+typealias ToolbarFiltersWithChartData = ToolbarFilters<ChartData>
 
-public struct ChartOutputMapperLive: ChartOutputMapper {
-    public func map(data: Components.Schemas.Chart, usign dateFormats: [DataFormatEntity]) -> ChartDataAggregate {
-        let configDataFormats = createDataFormats(from: dateFormats) ?? .createMock()
-        let legends = map(legends: data.legends, dataSets: data.dataSets)
-        let chartData = map(dataSets: data.dataSets, dataPoints: data.dataPoints, with: dateFormats)
-        let selectors = map(selectors: data.selectors)
-        let dimensions = map(dimension: data.dimensionSelectors)
+/// Generic ToolbarFilters that works with any ChartContainerFeature<T>
+struct ToolbarFilters<T: Equatable & Sendable>: View {
+    @Bindable
+    var store: StoreOf<ChartTableToolbarFeature<T>>
 
-        return ChartDataAggregate(
-            dataFormats: configDataFormats,
-            legends: legends,
-            data: chartData,
-            selectors: selectors,
-            dimensions: dimensions
-        )
+    init(store: StoreOf<ChartTableToolbarFeature<T>>) {
+        self.store = store
     }
 
-    // MARK: - Dimensions Mapping
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 16) {
+                // Render selectors
+                ForEach(store.selectors, id: \.id) { selector in
+                    FilterPill(dimension: selector) { option in
+                        store.send(.setSelectorOption(selectorId: selector, option: option))
+                    }
+                }
 
-    private func map(dimension dto: [Components.Schemas.Selector]?) -> [GenieCommonDomain.Dimension] {
-        guard let dto else { return [] }
-
-        return dto.compactMap { selector in
-            let id = extractIntFromGeneralId(selector.id)
-            let name = selector.name
-            let type = mapSelectorTypeToFilterType(selector._type)
-
-            let options = selector.options.compactMap { option in
-                let optionId = extractIntFromGeneralId(option.id)
-                return GenieCommonDomain.Dimension.Option(id: optionId, title: option.title)
+                // Render dimensions
+                ForEach(store.dimensions, id: \.id) { dimension in
+                    switch dimension.type {
+                    case .list:
+                        FilterPill(dimension: dimension) { option in
+                            store.send(
+                                .toggleDimensionOption(dimensionId: dimension.id, option: option))
+                        }
+                    case .segmented:
+                        SegmentedPill(dimension: dimension) { option in
+                            store.send(
+                                .toggleDimensionOption(dimensionId: dimension.id, option: option))
+                        }
+                    }
+                }
             }
-
-            guard !options.isEmpty else { return nil }
-
-            // Default to first 2 items
-            let selectedOptions = prepareSelectedOptions(from: options)
-
-            return GenieCommonDomain.Dimension(
-                id: id,
-                name: name,
-                type: type,
-                selectedOptions: selectedOptions,
-                options: options,
-                maxSelectableOptions: selector.maxMultiselectValues ?? defaultMaxSelectableOptions,
-                allowsMultiselect: selector.allowMultiselect ?? false
-            )
-        }
-    }
-
-    // MARK: - Selectors Mapping
-
-    private func map(selectors dto: [Components.Schemas.Selector]?) -> [Selectors] {
-        guard let dto else { return [] }
-
-        return dto.compactMap { selector in
-            let id = extractIntFromGeneralId(selector.id)
-            let name = selector.name
-
-            // Since Selectors is a typealias for Dimension, we need to provide all required parameters
-            // For selectors without options, we create a default option
-            let defaultOption = Dimension.Option(id: id, title: name)
-
-            return Dimension(
-                id: id,
-                name: name,
-                type: .list,
-                selectedOptions: [defaultOption],
-                options: [defaultOption],
-                maxSelectableOptions: defaultMaxSelectableOptions,
-                allowsMultiselect: false
-            )
-        }
-    }
-
-    // MARK: - Data Mapping
-
-    private func map(
-        dataSets: [Components.Schemas.ChartDataSet],
-        dataPoints: [Components.Schemas.ChartDataPoint],
-        with dataFormats: [DataFormatEntity] = []
-    ) -> [ChartDataWithVisibility<ChartData>] {
-        var colorRotator = ChartColorRotator(includeNovartisBlue: true)
-
-        // Create DrawableItem objects for each ChartDataSet
-        var drawableItemsById: [Int: DrawableItem] = [:]
-        for dataSet in dataSets {
-            let drawableItem = mapChartDataSetToDrawableItem(dataSet, &colorRotator)
-            drawableItemsById[dataSet.id] = drawableItem
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
 
-        // Group dataPoints by dataSetId
-        let groupedPoints = Dictionary(grouping: dataPoints) { $0.dataSetId }
-
-        var result: [ChartDataWithVisibility<ChartData>] = []
-
-        for (dataSetId, points) in groupedPoints {
-            guard let dataSet = dataSets.first(where: { $0.id == dataSetId }),
-                let drawableItem = drawableItemsById[dataSetId]
-            else { continue }
-
-            let chartDataList = points.enumerated().compactMap { (index, point) -> ChartData? in
-                return createChartDataFromPoint(
-                    point: point,
-                    dataSet: dataSet,
-                    drawableItem: drawableItem,
-                    index: index,
-                    dataFormats: dataFormats
-                )
-            }
-
-            let visibility = mapVisibilityToChartVisibility(dataSet.visibility)
-            let chartDataWithVisibility = ChartDataWithVisibility(
-                data: chartDataList,
-                visibility: visibility
-            )
-
-            result.append(chartDataWithVisibility)
-        }
-
-        return result
-    }
-
-    // MARK: - Legends Mapping
-
-    private func map(
-        legends dto: [[Components.Schemas.ChartLegend]]?,
-        dataSets: [Components.Schemas.ChartDataSet]
-    ) -> [LegendItem] {
-        guard let dto else { return [] }
-
-        var colorRotator = ChartColorRotator(includeNovartisBlue: true)
-
-        return dto.flatMap { legendGroup in
-            legendGroup.enumerated().compactMap { (index, legend) -> LegendItem? in
-                // FIXED: Use title.hashValue as ID (like in extension)
-                let id = legend.title.hashValue
-                let title = legend.title
-
-                // Extract color information
-                let color =
-                    extractColorFromSemanticColor(legend.color, with: &colorRotator) ?? "#000000"
-
-                // Map lineDecoration to MarkType
-                let markType = mapDataPointDecorationToMarkType(legend.lineDecoration)
-
-                // Find associated dataSets
-                let associatedDrawableIds =
-                    legend.associatedDataSetIds?.compactMap { Int($0) } ?? []
-
-                // Determine dataType from associated dataSets
-                let dataType = determineDataTypeFromAssociatedDataSets(
-                    associatedDataSetIds: associatedDrawableIds,
-                    dataSets: dataSets,
-                    colorRotator: &colorRotator
-                )
-
-                return LegendItem(
-                    id: id,
-                    title: title,
-                    color: color,
-                    markType: markType,
-                    associatedDrawableIds: associatedDrawableIds,
-                    dataType: dataType
-                )
-            }
-        }
-    }
-
-    // MARK: - Data Formats
-
-    private func createDataFormats(from dataFormats: [DataFormatEntity])
-        -> ChartFormatterConfig?
-    {
-        // Create number formatters from dataFormats
-        var numberFormatters: [FormatterItem<NumberFormatter>] = []
-        var dateFormatters: [FormatterItem<DateFormatter>] = []
-
-        for apiFormat in dataFormats {
-            // FIXED: Use apiFormat.id as FormatterItem id (not index)
-            switch apiFormat.unitType {
-            case .currency, .percentage, .numeric:
-                let formatter = createNumberFormatter(from: apiFormat)
-                numberFormatters.append(FormatterItem(id: apiFormat.id, formatter: formatter))
-            case .date:
-                let formatter = createDateFormatter(from: apiFormat)
-                dateFormatters.append(FormatterItem(id: apiFormat.id, formatter: formatter))
-            case .text:
-                break
-            }
-        }
-
-        // Use static decimal formatter as axis formatter
-        let axisFormatter: NumberFormatter = {
-            let formatter = NumberFormatter()
-            formatter.numberStyle = .decimal
-            formatter.maximumFractionDigits = 2
-            formatter.minimumFractionDigits = 0
-            return formatter
-        }()
-
-        return ChartFormatterConfig(
-            axisFormatter: axisFormatter,
-            supportedNumberFormatters: numberFormatters,
-            supportedDateFormatters: dateFormatters
-        )
-    }
-
-    private func createNumberFormatter(from apiFormat: DataFormatEntity)
-        -> NumberFormatter
-    {
-        let formatter = NumberFormatter()
-
-        switch apiFormat.unitType {
-        case .currency:
-            formatter.numberStyle = .currency
-        case .percentage:
-            formatter.numberStyle = .percent
-        case .numeric:
-            formatter.numberStyle = .decimal
-        default:
-            formatter.numberStyle = .decimal
-        }
-
-        formatter.maximumFractionDigits = apiFormat.digits ?? 2
-        formatter.minimumFractionDigits = 0
-        return formatter
-    }
-
-    private func createDateFormatter(from apiFormat: DataFormatEntity) -> DateFormatter
-    {
-        let formatter = DateFormatter()
-        formatter.dateFormat = apiFormat.dateFormat ?? "MMM yyyy"
-        return formatter
     }
 }
 
-// MARK: - Helper Functions
+// MARK: - FilterPill that works with Dimension
+struct FilterPill: View {
+    let dimension: GenieCommonDomain.Dimension?
+    let title: String
+    let count: Int
+    let options: [GenieCommonDomain.Dimension.Option]
+    let onSelect: ((GenieCommonDomain.Dimension.Option) -> Void)?
 
-private extension ChartOutputMapperLive {
+    @State private var selectedId: Int
+    @State private var showingModal: Bool = false
 
-    func extractIntFromGeneralId(_ id: Components.Schemas.GeneralId) -> Int {
-        switch id {
-        case .integer(let intValue):
-            return intValue
-        case .string(let stringValue):
-            return Int(stringValue) ?? 0
+    init(
+        dimension: GenieCommonDomain.Dimension,
+        onSelect: @escaping (GenieCommonDomain.Dimension.Option) -> Void
+    ) {
+        self.dimension = dimension
+        self.title = dimension.name
+        self.count = 0
+        self.options = dimension.options
+        self.onSelect = onSelect
+        _selectedId = State(
+            initialValue: dimension.selectedOptions.first?.id ?? dimension.options.first?.id ?? 0)
+    }
+
+    // fallback initializer used by preview
+    init(title: String, count: Int, options: [String] = ["All", "Option 1", "Option 2"]) {
+        self.dimension = nil
+        self.title = title
+        self.count = count
+        self.options = options.enumerated().map {
+            Dimension.Option(id: $0.offset, title: $0.element)
         }
+        self.onSelect = nil
+        _selectedId = State(initialValue: self.options.first?.id ?? 0)
     }
 
-    func mapSelectorTypeToFilterType(_ type: Components.Schemas.SelectorType?)
-        -> GenieCommonDomain.Dimension.FilterType
-    {
-        guard let type = type else { return .list }
-
-        let rawValue = type.rawValue
-        switch rawValue {
-        case "segmented":
-            return .segmented
-        default:
-            return .list
+    var body: some View {
+        Button {
+            showingModal = true
+        } label: {
+            titleBuilder()
         }
-    }
-
-    func prepareSelectedOptions(
-        from options: [GenieCommonDomain.Dimension.Option]
-    ) -> [GenieCommonDomain.Dimension.Option] {
-        // Default to first 2 items or all if less than 2
-        return Array(options.prefix(2))
-    }
-
-    func mapChartDataSetToDrawableItem(
-        _ dataSet: Components.Schemas.ChartDataSet, _ colorRotator: inout ChartColorRotator
-    )
-        -> DrawableItem
-    {
-        let name = "DataSet \(dataSet.id)"
-        let isDashed = dataSet.lineStyle == .dashed
-        let colorHex =
-            extractColorFromSemanticColor(dataSet.color, with: &colorRotator) ?? "#000000"
-        let opacity = 1.0
-        let markType = mapDataPointDecorationToMarkType(dataSet.lineDecoration)
-
-        return DrawableItem(
-            id: dataSet.id,
-            name: name,
-            isDashed: isDashed,
-            colorHex: colorHex,
-            opacity: opacity,
-            markType: markType
-        )
-    }
-
-    func mapDataPointDecorationToMarkType(
-        _ decoration: Components.Schemas.DataPointDecoration?
-    ) -> MarkType {
-        switch decoration {
-        case .circle:
-            return .circle
-        case .square:
-            return .square
-        case .diamond:
-            return .diamond
-        case nil, .triangle, .cross, .some(.none):
-            return .circle
-        }
-    }
-
-    func extractColorFromSemanticColor(
-        _ color: Components.Schemas.SemanticColor?, with colorRotator: inout ChartColorRotator
-    ) -> String? {
-        guard let hex = color?.hexValue else {
-            return colorRotator.nextColor()
-        }
-        return hex
-    }
-
-    func mapVisibilityToChartVisibility(
-        _ visibility: Components.Schemas.ChartDataSetVisibility?
-    ) -> ChartVisibility? {
-        guard let visibility = visibility else { return nil }
-
-        let handling: ChartVisibility.Handling
-        if let handlingValue = visibility.handling {
-            switch handlingValue {
-            case .allOf:
-                handling = .allOf
-            case .oneOf:
-                handling = .oneOf
-            }
-        } else {
-            handling = .none
-        }
-
-        let dimensionAssociations =
-            visibility.dimensionAssociations?.map { association in
-                ChartVisibility.DimensionAssociation(
-                    dimensionId: association.dimensionId,
-                    value: association.value
-                )
-            } ?? []
-
-        return ChartVisibility(
-            handling: handling,
-            dimensionAssociations: dimensionAssociations
-        )
-    }
-
-    func createChartDataFromPoint(
-        point: Components.Schemas.ChartDataPoint,
-        dataSet: Components.Schemas.ChartDataSet,
-        drawableItem: DrawableItem,
-        index: Int,
-        dataFormats: [DataFormatEntity]
-    ) -> ChartData? {
-        // Extract date from xValue
-        guard let date = extractDateFromValue(point.xValue) else { return nil }
-
-        // Extract numeric value from yValue
-        guard let value = extractDoubleFromValue(point.yValue) else { return nil }
-
-        // FIXED: Find formatter indices using dataFormatId from the point
-        let dateFormatterIndex = findFormatterIndexForDataFormatId(
-            point.xValue.dataFormatId, in: dataFormats)
-        let valueFormatterIndex = findFormatterIndexForDataFormatId(
-            point.yValue.dataFormatId, in: dataFormats)
-
-        // Determine data type
-        let dataType: DataType
-        switch dataSet.chartType {
-        case .bar:
-            dataType = .bar(drawableItem)
-        case .line:
-            dataType = .projectedLine(drawableItem)
-        }
-
-        // Create tooltip if available
-        let tooltip = createTooltipFromChartTooltip(
-            point.tooltip, date: date, dataFormats: dataFormats)
-
-        // FIXED: Use dataSet.id for both legendId and componentId (not String conversion)
-        return ChartData(
-            legendId: dataSet.id,
-            componentId: dataSet.id,
-            date: date,
-            dateFormatterIndex: dateFormatterIndex,
-            valueFormatterIndex: valueFormatterIndex,
-            value: value,
-            type: dataType,
-            index: index,
-            tooltip: tooltip
-        )
-    }
-
-    func extractDateFromValue(_ value: Components.Schemas.Value) -> Date? {
-        guard let dateString = value.value?.stringValue else {
-            return nil
-        }
-        
-        // FIXED: Use DateParser.shared like in extension
-        return DateParser.shared.parseDate(from: dateString)
-    }
-
-    func extractDoubleFromValue(_ value: Components.Schemas.Value) -> Double? {
-        // Try to extract numeric value from the value field
-        if let doubleValue = value.value?.numberValue {
-            return doubleValue
-        }
-        if let stringValue = value.value?.stringValue, let doubleValue = Double(stringValue) {
-            return doubleValue
-        }
-        return nil
-    }
-
-    // FIXED: Method to find formatter index by dataFormatId
-    func findFormatterIndexForDataFormatId(
-        _ dataFormatId: Int,
-        in dataFormats: [DataFormatEntity]
-    ) -> Int? {
-        // Match the dataFormatId to a formatter's id
-        return dataFormats.firstIndex { $0.id == dataFormatId }
-    }
-
-    func findFormatterIndex(
-        for type: DataFormatUnitType, in formats: [DataFormatEntity]
-    ) -> Int? {
-        return formats.firstIndex { format in
-            format.unitType == type
-        }
-    }
-
-    func createTooltipFromChartTooltip(
-        _ tooltip: Components.Schemas.ChartTooltip?,
-        date: Date,
-        dataFormats: [DataFormatEntity]
-    ) -> TooltipData? {
-        guard let tooltip else { return nil }
-
-        // Map rows from ChartTooltip to TooltipRow
-        let rows: [TooltipRow] =
-            tooltip.rows?.enumerated().compactMap { (index, valueArray) in
-                // Each row is an array of values, typically [label, value]
-                guard valueArray.count >= 2 else { return nil }
-
-                let labelValue = valueArray[0]
-                let dataValue = valueArray[1]
-
-                // Extract label from first value
-                let label: String
-                if let labelStr = labelValue.value?.stringValue {
-                    label = labelStr
-                } else {
-                    label = "Row \(index)"
+        .buttonStyle(PlainButtonStyle())
+        .sheet(isPresented: $showingModal) {
+            if let dim = dimension {
+                ChartTableFilterModalView(filter: dim) { updated in
+                    // Update local selectedId for single-select, and notify via onSelect for single-select
+                    if !updated.allowsMultiselect {
+                        if let first = updated.selectedOptions.first {
+                            selectedId = first.id
+                            onSelect?(first)
+                        } else {
+                            // No selection
+                            selectedId = updated.options.first?.id ?? 0
+                        }
+                    } else {
+                        // For multiselect, keep selectedId consistent with first selected option if any
+                        if let first = updated.selectedOptions.first {
+                            selectedId = first.id
+                        }
+                    }
                 }
-
-                // Extract numeric value from second value
-                guard let numericValue = extractDoubleFromValue(dataValue) else { return nil }
-
-                // FIXED: Find formatter index using dataFormatId
-                let valueFormatterIndex = findFormatterIndexForDataFormatId(
-                    dataValue.dataFormatId,
-                    in: dataFormats
-                )
-
-                // Extract color if available
-                let colorHex: String? = nil
-
-                return TooltipRow(
-                    label: label,
-                    value: numericValue,
-                    valueFormatterIndex: valueFormatterIndex,
-                    colorHex: colorHex
-                )
-            } ?? []
-
-        // FIXED: Find date formatter index using findFormatterIndex for .date type
-        return TooltipData(
-            label: tooltip.title ?? "",
-            date: date,
-            dateFormatterIndex: findFormatterIndex(for: .date, in: dataFormats),
-            rows: rows
-        )
-    }
-
-    func determineDataTypeFromAssociatedDataSets(
-        associatedDataSetIds: [Int],
-        dataSets: [Components.Schemas.ChartDataSet],
-        colorRotator: inout ChartColorRotator
-    ) -> DataType? {
-        guard let firstId = associatedDataSetIds.first,
-            let dataSet = dataSets.first(where: { $0.id == firstId })
-        else { return nil }
-
-        let drawableItem = mapChartDataSetToDrawableItem(dataSet, &colorRotator)
-
-        switch dataSet.chartType {
-        case .bar:
-            return .bar(drawableItem)
-        case .line:
-            return .projectedLine(drawableItem)
+            } else {
+                EmptyView()
+            }
+        }
+        .onChange(of: dimension?.selectedOptions) { _, new in
+            if let new = new, let firstId = new.first?.id {
+                selectedId = firstId
+            }
         }
     }
+
+    @ViewBuilder
+    private func titleBuilder() -> some View {
+        let filterTitle = title.isEmpty ? "Filter" : title
+
+        let displayText: String = {
+            if let selected = dimension?.selectedOptions {
+                if selected.count == 1 {
+                    return selected.first?.title ?? filterTitle
+                } else if selected.count > 1 {
+                    return "\(filterTitle) +\(selected.count)"
+                }
+            }
+
+            return options.first(where: { $0.id == selectedId })?.title ?? filterTitle
+        }()
+
+        HStack(spacing: 8) {
+            Text(displayText)
+                .font(.system(size: 16, weight: .regular))
+            Image(systemName: "chevron.down")
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Capsule().fill(Color(.systemGray6)))
+    }
+}
+
+// MARK: - Segmented pill that works with Dimension
+struct SegmentedPill: View {
+    let dimension: GenieCommonDomain.Dimension
+    let options: [GenieCommonDomain.Dimension.Option]
+    let onSelect: (GenieCommonDomain.Dimension.Option) -> Void
+
+    // Configurable colors with defaults
+    let backgroundColor: Color
+    let thumbColor: Color
+    let selectedTextColor: Color
+    let unselectedTextColor: Color
+
+    init(
+        dimension: GenieCommonDomain.Dimension,
+        onSelect: @escaping (GenieCommonDomain.Dimension.Option) -> Void,
+        backgroundColor: Color = Color(UIColor.grayBackground),
+        thumbColor: Color = Color(UIColor.groupBackground),
+        selectedTextColor: Color = Color(UIColor.rowTitle),
+        unselectedTextColor: Color = Color(UIColor.secondaryText)
+    ) {
+        self.dimension = dimension
+        self.options = dimension.options
+        self.onSelect = onSelect
+        self.backgroundColor = backgroundColor
+        self.thumbColor = thumbColor
+        self.selectedTextColor = selectedTextColor
+        self.unselectedTextColor = unselectedTextColor
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let segmentWidth = geo.size.width / CGFloat(max(1, options.count))
+            let selectedIndex =
+                options.firstIndex(where: { $0.id == dimension.selectedOptions.first?.id }) ?? 0
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(backgroundColor)
+                Capsule()
+                    .fill(thumbColor)
+                    .frame(width: segmentWidth)
+                    .offset(x: CGFloat(selectedIndex) * segmentWidth)
+                    .shadow(radius: 1)
+                    .animation(.spring(), value: dimension.selectedOptions.first?.id)
+                HStack(spacing: 0) {
+                    ForEach(Array(options.enumerated()), id: \.element.id) { idx, option in
+                        segmentLabel(
+                            option.title,
+                            isSelected: option.id == dimension.selectedOptions.first?.id
+                        )
+                        .frame(width: segmentWidth)
+                        .contentShape(Rectangle())
+                        .onTapGesture { onSelect(option) }
+                    }
+                }
+            }
+        }
+        .frame(width: 160, height: 36)
+        .padding(.horizontal, 4)
+    }
+
+    @ViewBuilder
+    private func segmentLabel(_ text: String, isSelected: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 16, weight: isSelected ? .semibold : .regular))
+            .foregroundColor(isSelected ? selectedTextColor : unselectedTextColor)
+            .multilineTextAlignment(.center)
+    }
+}
+
+#Preview("Toolbar", traits: .landscapeLeft) {
+    // Preview with a Store initialized from mock data so the preview reflects real state
+    let initialDimensions = mockDimensions
+    let initialItems = mockChartDataWithVisibility
+    let visible = initialItems.filter { item in
+        ChartTableToolbarFeatureWithStrings.isItemVisible(
+            item,
+            with: ChartTableToolbarFeatureWithStrings.dimensionSelectedMap(from: initialDimensions))
+    }
+
+    let store = Store(
+        initialState: ChartTableToolbarFeatureWithStrings.State(
+            items: initialItems,
+            dimensions: initialDimensions,
+            selectedDimensionIds: Set(initialDimensions.map { $0.id }),
+            visibleChartData: visible
+        )
+    ) {
+        ChartTableToolbarFeatureWithStrings()
+    }
+
+    ToolbarFilters<String>(store: store)
+}
+
+#Preview("FilterPills Example", traits: .landscapeLeft) {
+    // Build two dimensions: one with 1 selected option, another with 3 selected options
+    let options = (0..<6).map {
+        GenieCommonDomain.FilterWithOptions.Option(id: $0, title: "Opt \($0)")
+    }
+
+    let dimOneSelected = GenieCommonDomain.FilterWithOptions(
+        id: 1,
+        name: "Title single",
+        type: .list,
+        selectedOptions: [options[1]],
+        options: options,
+        allowsMultiselect: true
+    )
+
+    let dimThreeSelected = GenieCommonDomain.FilterWithOptions(
+        id: 2,
+        name: "Title Multi",
+        type: .list,
+        selectedOptions: [options[0], options[2], options[3]],
+        options: options,
+        allowsMultiselect: true
+    )
+
+    HStack(spacing: 16) {
+        FilterPill(dimension: dimOneSelected) { _ in }
+        FilterPill(dimension: dimThreeSelected) { _ in }
+    }
+    .padding()
 }
