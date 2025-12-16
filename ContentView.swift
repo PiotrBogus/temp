@@ -5,7 +5,7 @@ case .setSelectorOptions(let selector, let options):
     }
     let current = state.selectors[selectorInd]
     
-    // Validate that all options exist in the selector's available options
+    // Validate options
     let validOptions = options.filter { option in
         current.options.contains(where: { $0.id == option.id })
     }
@@ -14,13 +14,19 @@ case .setSelectorOptions(let selector, let options):
         return .none
     }
     
-    // Create a new selector with the provided options as selected
+    // Start with cleared selection, then apply each valid option
     var updated = current
-    updated.selectedOptions = validOptions
+    // First deselect all current options
+    for option in current.selectedOptions {
+        updated = updated.deselectOption(option)
+    }
+    // Then select all valid options
+    for option in validOptions {
+        updated = updated.selectOption(option)
+    }
     
     state.selectors[selectorInd] = updated
     
-    // Send delegate action only if selection actually changed
     if updated.selectedOptions != current.selectedOptions {
         return .send(.delegate(.selectorsChangedTo(selector: updated)))
     }
