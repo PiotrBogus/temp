@@ -1,143 +1,398 @@
-InstallDetails_btn_Copy:
-  en: "Skopiuj"
-  pl: "Skopiuj"
-  ru: "Skopiuj"
-  uk: "Skopiuj"
+import ComposableArchitecture
+import GenieCommonData
+import GenieCommonDomain
+import SwiftUI
 
-InstallDetails_lbl_ActivationCode:
-  en: "Kod aktywacyjny"
-  pl: "Kod aktywacyjny"
-  ru: "Kod aktywacyjny"
-  uk: "Kod aktywacyjny"
+// Convenience typealiases for specific ChartContainerFeature types
+typealias ToolbarFiltersWithStrings = ToolbarFilters<String>
+typealias ToolbarFiltersWithChartData = ToolbarFilters<ChartData>
 
-InstallDetails_lbl_ActivationCodeCopyMessage:
-  en: "The activation code was copied"
-  pl: "Kod aktywacyjny został skopiowany"
-  ru: "Kod aktywacyjny został skopiowany"
-  uk: "Kod aktywacyjny został skopiowany"
+/// Generic ToolbarFilters that works with any ChartContainerFeature<T>
+struct ToolbarFilters<T: Equatable & Sendable>: View {
+    @Bindable
+    var store: StoreOf<ChartTableToolbarFeature<T>>
 
-InstallDetails_lbl_ActivationCodeLPA:
-  en: "Kod aktywacyjny (LPA)"
-  pl: "Kod aktywacyjny (LPA)"
-  ru: "Kod aktywacyjny (LPA)"
-  uk: "Kod aktywacyjny (LPA)"
+    init(store: StoreOf<ChartTableToolbarFeature<T>>) {
+        self.store = store
+    }
 
-InstallDetails_lbl_AddressSMDP:
-  en: "Adres SM-DP+"
-  pl: "Adres SM-DP+"
-  ru: "Adres SM-DP+"
-  uk: "Adres SM-DP+"
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 16) {
+                // Render selectors
+                ForEach(store.selectors, id: \.id) { selector in
+                    FilterPill(dimension: selector) { option in
+                        store.send(.setSelectorOption(selectorId: selector, option: option))
+                    }
+                }
 
-InstallDetails_lbl_ContentMessage:
-  en: "Kartę eSIM możesz zainstalować w ustawieniach swojego urządzenia. Skorzystaj z instrukcji, którą przesłaliśmy na Twój adres e-mail."
-  pl: "Kartę eSIM możesz zainstalować w ustawieniach swojego urządzenia. Skorzystaj z instrukcji, którą przesłaliśmy na Twój adres e-mail."
-  ru: "Kartę eSIM możesz zainstalować w ustawieniach swojego urządzenia. Skorzystaj z instrukcji, którą przesłaliśmy na Twój adres e-mail."
-  uk: "Kartę eSIM możesz zainstalować w ustawieniach swojego urządzenia. Skorzystaj z instrukcji, którą przesłaliśmy na Twój adres e-mail."
+                // Render dimensions
+                ForEach(store.dimensions, id: \.id) { dimension in
+                    switch dimension.type {
+                    case .list:
+                        FilterPill(dimension: dimension) { option in
+                            store.send(
+                                .toggleDimensionOption(dimensionId: dimension.id, option: option))
+                        }
+                    case .segmented:
+                        SegmentedPill(dimension: dimension) { option in
+                            store.send(
+                                .toggleDimensionOption(dimensionId: dimension.id, option: option))
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        }
 
-InstallDetails_lbl_SimNumber:
-  en: "Numer kart eSIM"
-  pl: "Numer kart eSIM"
-  ru: "Numer kart eSIM"
-  uk: "Numer kart eSIM"
+    }
+}
 
-InstallDetails_lbl_SMDPCodeCopyMessage:
-  en: "Adress SM-DP+ code was copied"
-  pl: "Adres SM-DP+ został skopiowany"
-  ru: "Adres SM-DP+ został skopiowany"
-  uk: "Adres SM-DP+ został skopiowany"
+// MARK: - FilterPill that works with Dimension
+struct FilterPill: View {
+    let dimension: GenieCommonDomain.Dimension?
+    let title: String
+    let count: Int
+    let options: [GenieCommonDomain.Dimension.Option]
+    let onSelect: ((GenieCommonDomain.Dimension.Option) -> Void)?
 
-InstallDetails_lbl_TariffName:
-  en: "Nazwa usługi"
-  pl: "Nazwa usługi"
-  ru: "Nazwa usługi"
-  uk: "Nazwa usługi"
+    @State private var selectedId: Int
+    @State private var showingModal: Bool = false
 
-InstallDetails_lbl_Title:
-  en: "Instalacja karty eSIM"
-  pl: "Instalacja karty eSIM"
-  ru: "Instalacja karty eSIM"
-  uk: "Instalacja karty eSIM"
+    init(
+        dimension: GenieCommonDomain.Dimension,
+        onSelect: @escaping (GenieCommonDomain.Dimension.Option) -> Void
+    ) {
+        self.dimension = dimension
+        self.title = dimension.name
+        self.count = 0
+        self.options = dimension.options
+        self.onSelect = onSelect
+        _selectedId = State(
+            initialValue: dimension.selectedOptions.first?.id ?? dimension.options.first?.id ?? 0)
+    }
 
-InstallError_btn_UnsupportedDeviceOk:
-  en: "OK"
-  pl: "OK"
-  ru: "OK"
-  uk: "OK"
+    // fallback initializer used by preview
+    init(title: String, count: Int, options: [String] = ["All", "Option 1", "Option 2"]) {
+        self.dimension = nil
+        self.title = title
+        self.count = count
+        self.options = options.enumerated().map {
+            Dimension.Option(id: $0.offset, title: $0.element)
+        }
+        self.onSelect = nil
+        _selectedId = State(initialValue: self.options.first?.id ?? 0)
+    }
 
-InstallError_lbl_GeneralDescription:
-  en: "Spróbuj ponownie później."
-  pl: "Spróbuj ponownie później."
-  ru: "Spróbuj ponownie później."
-  uk: "Spróbuj ponownie później."
+    var body: some View {
+        Button {
+            showingModal = true
+        } label: {
+            titleBuilder()
+        }
+        .buttonStyle(PlainButtonStyle())
+        .sheet(isPresented: $showingModal) {
+            if let dim = dimension {
+                ChartTableFilterModalView(filter: dim) { updated in
+                    // Update local selectedId for single-select, and notify via onSelect for single-select
+                    if !updated.allowsMultiselect {
+                        if let first = updated.selectedOptions.first {
+                            selectedId = first.id
+                            onSelect?(first)
+                        } else {
+                            // No selection
+                            selectedId = updated.options.first?.id ?? 0
+                        }
+                    } else {
+                        // For multiselect, keep selectedId consistent with first selected option if any
+                        if let first = updated.selectedOptions.first {
+                            selectedId = first.id
+                        }
+                    }
+                }
+            } else {
+                EmptyView()
+            }
+        }
+        .onChange(of: dimension?.selectedOptions) { _, new in
+            if let new = new, let firstId = new.first?.id {
+                selectedId = firstId
+            }
+        }
+    }
 
-InstallError_lbl_GeneralTitle:
-  en: "Nie możesz teraz zainstalować karty eSIM"
-  pl: "Nie możesz teraz zainstalować karty eSIM"
-  ru: "Nie możesz teraz zainstalować karty eSIM"
-  uk: "Nie możesz teraz zainstalować karty eSIM"
+    @ViewBuilder
+    private func titleBuilder() -> some View {
+        let filterTitle = title.isEmpty ? "Filter" : title
 
-InstallError_lbl_UnsupportedDeviceDescription:
-  en: "Jeśli chcesz zainstalować kartę eSIM, skorzystaj z innego urządzenia."
-  pl: "Jeśli chcesz zainstalować kartę eSIM, skorzystaj z innego urządzenia."
-  ru: "Jeśli chcesz zainstalować kartę eSIM, skorzystaj z innego urządzenia."
-  uk: "Jeśli chcesz zainstalować kartę eSIM, skorzystaj z innego urządzenia."
+        let displayText: String = {
+            if let selected = dimension?.selectedOptions {
+                if selected.count == 1 {
+                    return selected.first?.title ?? filterTitle
+                } else if selected.count > 1 {
+                    return "\(filterTitle) +\(selected.count)"
+                }
+            }
 
-InstallError_lbl_UnsupportedDeviceTitle:
-  en: "Twój telefon nie obsługuje kart eSIM"
-  pl: "Twój telefon nie obsługuje kart eSIM"
-  ru: "Twój telefon nie obsługuje kart eSIM"
-  uk: "Twój telefon nie obsługuje kart eSIM"
+            return options.first(where: { $0.id == selectedId })?.title ?? filterTitle
+        }()
 
-InstallSplash_lbl_Description:
-  en: "Nie zamykaj ekranu"
-  pl: "Nie zamykaj ekranu"
-  ru: "Nie zamykaj ekranu"
-  uk: "Nie zamykaj ekranu"
+        HStack(spacing: 8) {
+            Text(displayText)
+                .font(.system(size: 16, weight: .regular))
+            Image(systemName: "chevron.down")
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Capsule().fill(Color(.systemGray6)))
+    }
+}
 
-InstallSplash_lbl_PageTitle:
-  en: "Instalacja karty eSIM"
-  pl: "Instalacja karty eSIM"
-  ru: "Instalacja karty eSIM"
-  uk: "Instalacja karty eSIM"
+// MARK: - Segmented pill that works with Dimension
+struct SegmentedPill: View {
+    let dimension: GenieCommonDomain.Dimension
+    let options: [GenieCommonDomain.Dimension.Option]
+    let onSelect: (GenieCommonDomain.Dimension.Option) -> Void
 
-InstallSplash_lbl_Title:
-  en: "Sprawdzamy ustawienia Twojego urządzenia"
-  pl: "Sprawdzamy ustawienia Twojego urządzenia"
-  ru: "Sprawdzamy ustawienia Twojego urządzenia"
-  uk: "Sprawdzamy ustawienia Twojego urządzenia"
+    // Configurable colors with defaults
+    let backgroundColor: Color
+    let thumbColor: Color
+    let selectedTextColor: Color
+    let unselectedTextColor: Color
 
-InstallSuccess_btn_OK:
-  en: "OK"
-  pl: "OK"
-  ru: "OK"
-  uk: "OK"
+    init(
+        dimension: GenieCommonDomain.Dimension,
+        onSelect: @escaping (GenieCommonDomain.Dimension.Option) -> Void,
+        backgroundColor: Color = Color(UIColor.grayBackground),
+        thumbColor: Color = Color(UIColor.groupBackground),
+        selectedTextColor: Color = Color(UIColor.rowTitle),
+        unselectedTextColor: Color = Color(UIColor.secondaryText)
+    ) {
+        self.dimension = dimension
+        self.options = dimension.options
+        self.onSelect = onSelect
+        self.backgroundColor = backgroundColor
+        self.thumbColor = thumbColor
+        self.selectedTextColor = selectedTextColor
+        self.unselectedTextColor = unselectedTextColor
+    }
 
-InstallSuccess_lbl_Description:
-  en: "Karta aktywuje się, gdy połączysz się z lokalną siecią w kraju, w którym aktualnie jesteś. Wcześniej nie będzie działać."
-  pl: "Karta aktywuje się, gdy połączysz się z lokalną siecią w kraju, w którym aktualnie jesteś. Wcześniej nie będzie działać."
-  ru: "Karta aktywuje się, gdy połączysz się z lokalną siecią w kraju, w którym aktualnie jesteś. Wcześniej nie będzie działać."
-  uk: "Karta aktywuje się, gdy połączysz się z lokalną siecią w kraju, w którym aktualnie jesteś. Wcześniej nie będzie działać."
+    var body: some View {
+        GeometryReader { geo in
+            let segmentWidth = geo.size.width / CGFloat(max(1, options.count))
+            let selectedIndex =
+                options.firstIndex(where: { $0.id == dimension.selectedOptions.first?.id }) ?? 0
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(backgroundColor)
+                Capsule()
+                    .fill(thumbColor)
+                    .frame(width: segmentWidth)
+                    .offset(x: CGFloat(selectedIndex) * segmentWidth)
+                    .shadow(radius: 1)
+                    .animation(.spring(), value: dimension.selectedOptions.first?.id)
+                HStack(spacing: 0) {
+                    ForEach(Array(options.enumerated()), id: \.element.id) { idx, option in
+                        segmentLabel(
+                            option.title,
+                            isSelected: option.id == dimension.selectedOptions.first?.id
+                        )
+                        .frame(width: segmentWidth)
+                        .contentShape(Rectangle())
+                        .onTapGesture { onSelect(option) }
+                    }
+                }
+            }
+        }
+        .frame(width: 160, height: 36)
+        .padding(.horizontal, 4)
+    }
 
-InstallSuccess_lbl_Title:
-  en: "Karta eSIM została zainstalowana na tym urządzeniu"
-  pl: "Karta eSIM została zainstalowana na tym urządzeniu"
-  ru: "Karta eSIM została zainstalowana na tym urządzeniu"
-  uk: "Karta eSIM została zainstalowana na tym urządzeniu"
+    @ViewBuilder
+    private func segmentLabel(_ text: String, isSelected: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 16, weight: isSelected ? .semibold : .regular))
+            .foregroundColor(isSelected ? selectedTextColor : unselectedTextColor)
+            .multilineTextAlignment(.center)
+    }
+}
 
-Install_btn_DeviceSettings:
-  en: "Przejdź do ustawień urządzenia"
-  pl: "Przejdź do ustawień urządzenia"
-  ru: "Przejdź do ustawień urządzenia"
-  uk: "Przejdź do ustawień urządzenia"
+#Preview("Toolbar", traits: .landscapeLeft) {
+    // Preview with a Store initialized from mock data so the preview reflects real state
+    let initialDimensions = mockDimensions
+    let initialItems = mockChartDataWithVisibility
+    let selectedMap = Dimension.createDimensionSelectedMap(from: initialDimensions)
+    let visible = initialItems.filter { item in
+        item.isItemVisible(dimensionOptionDictionary: selectedMap)
+    }
 
-Install_btn_OpenHome:
-  en: "Przejdź do ekranu startowego"
-  pl: "Przejdź do ekranu startowego"
-  ru: "Przejdź do ekranu startowego"
-  uk: "Przejdź do ekranu startowego"
+    let store = Store(
+        initialState: ChartTableToolbarFeatureWithStrings.State(
+            dimensions: initialDimensions,
+            selectors: [],
+            selectedDimensionIds: Set(initialDimensions.map { $0.id }),
+        )
+    ) {
+        ChartTableToolbarFeatureWithStrings()
+    }
 
-Install_btn_OpenMyProducts:
-  en: "Przejdź do ekranu aktywnych Usług i zakupów"
-  pl: "Przejdź do ekranu aktywnych Usług i zakupów"
-  ru: "Przejdź do ekranu aktywnych Usług i zakupów"
-  uk: "Przejdź do ekranu aktywnych Usług i zakupów"
+    ToolbarFilters<String>(store: store)
+}
+
+#Preview("FilterPills Example", traits: .landscapeLeft) {
+    // Build two dimensions: one with 1 selected option, another with 3 selected options
+    let options = (0..<6).map {
+        GenieCommonDomain.FilterWithOptions.Option(id: $0, title: "Opt \($0)")
+    }
+
+    let dimOneSelected = GenieCommonDomain.FilterWithOptions(
+        id: 1,
+        name: "Title single",
+        type: .list,
+        selectedOptions: [options[1]],
+        options: options,
+        allowsMultiselect: true
+    )
+
+    let dimThreeSelected = GenieCommonDomain.FilterWithOptions(
+        id: 2,
+        name: "Title Multi",
+        type: .list,
+        selectedOptions: [options[0], options[2], options[3]],
+        options: options,
+        allowsMultiselect: true
+    )
+
+    HStack(spacing: 16) {
+        FilterPill(dimension: dimOneSelected) { _ in }
+        FilterPill(dimension: dimThreeSelected) { _ in }
+    }
+    .padding()
+}
+
+
+
+
+
+import ComposableArchitecture
+import Foundation
+import GenieCommonData
+import GenieCommonDomain
+
+@Reducer
+public struct ChartTableToolbarFeature<T: Equatable & Sendable>: Sendable {
+
+    // MARK: - State
+    @ObservableState
+    public struct State: Equatable, Sendable {
+        var dimensions: [GenieCommonDomain.Dimension]
+        var selectors: [Selectors]
+        var selectedDimensionIds: Set<Int>
+
+        /// Initializes a new instance of the chart table toolbar feature.
+        ///
+        /// - Parameters:
+        ///   - dimensions: An array of available dimensions for the chart. Defaults to an empty array.
+        ///   - selectors: An array of selector configurations. Defaults to an empty array.
+        ///   - selectedDimensionIds: A set of IDs representing the currently selected dimensions. Defaults to an empty set.
+        public init(
+            dimensions: [GenieCommonDomain.Dimension] = [],
+            selectors: [Selectors] = [],
+            selectedDimensionIds: Set<Int> = []
+        ) {
+            self.dimensions = dimensions
+            self.selectors = selectors
+            self.selectedDimensionIds = selectedDimensionIds
+        }
+
+        /// Initializes a default empty state
+        public init() {
+            self.dimensions = []
+            self.selectors = []
+            self.selectedDimensionIds = []
+        }
+    }
+
+    // MARK: - Action
+    public enum Action: Equatable, Sendable {
+        case delegate(Delegate)
+        case set(
+            selectors: [Selectors], dimensions: [GenieCommonDomain.Dimension])
+        case setSelectorOption(
+            selectorId: Selectors, option: GenieCommonDomain.Dimension.Option)
+        case toggleDimensionOption(
+            dimensionId: Int, option: GenieCommonDomain.Dimension.Option)
+
+        public enum Delegate: Equatable, Sendable {
+            case selectorsChangedTo(selector: Selectors)
+            case computeVisibilityRequested
+        }
+    }
+
+    public var body: some Reducer<State, Action> {
+        Reduce { state, action in
+            switch action {
+            case .set(let selectors, let dimensions):
+                state.selectors = selectors
+                state.dimensions = dimensions
+                return .send(.delegate(.computeVisibilityRequested))
+
+            case .setSelectorOption(let selector, let option):
+                guard let selectorInd = state.selectors.firstIndex(where: { $0.id == selector.id })
+                else {
+                    return .none
+                }
+                let current = state.selectors[selectorInd]
+                guard let newSelected = current.options.first(where: { $0 == option }) else {
+                    return .none
+                }
+                // Use helper to handle selection logic (single vs multi select, max limits)
+                state.selectors[selectorInd] = current.selectOption(newSelected)
+
+                // Send delegate action
+                return .send(.delegate(.selectorsChangedTo(selector: state.selectors[selectorInd])))
+            case .toggleDimensionOption(let dimensionId, let option):
+                let result = toggleDimensionOption(
+                    dimensionId: dimensionId, option: option, in: &state)
+                return result ? .send(.delegate(.computeVisibilityRequested)) : .none
+
+            case .delegate:
+                return .none
+            }
+        }
+    }
+
+    // MARK: - Helper Functions
+
+    private func toggleDimensionOption(
+        dimensionId: Int,
+        option: GenieCommonDomain.Dimension.Option,
+        in state: inout State
+    ) -> Bool {
+        guard let dimInd = state.dimensions.firstIndex(where: { $0.id == dimensionId }) else {
+            return false
+        }
+        let current = state.dimensions[dimInd]
+        guard current.options.contains(option) else {
+            return false
+        }
+
+        let wasSelected = current.selectedOptions.contains(where: { $0.id == option.id })
+        let updated: GenieCommonDomain.Dimension
+        if wasSelected {
+            updated = current.deselectOption(option)
+        } else {
+            updated = current.selectOption(option)
+        }
+
+        state.dimensions[dimInd] = updated
+
+        return updated.selectedOptions != current.selectedOptions
+    }
+}
+
+// MARK: - Type Aliases for convenience
+public typealias ChartTableToolbarFeatureWithStrings = ChartTableToolbarFeature<String>
+public typealias ChartTableToolbarFeatureWithChartData = ChartTableToolbarFeature<ChartData>
