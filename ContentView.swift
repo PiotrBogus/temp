@@ -1,47 +1,10 @@
-private func handleError<T>(
-    for operation: IKOCoreOperation?,
-    with continuation: CheckedContinuation<T, BehavioralBiometricError>
-) {
-    operation?.errorHandler = { coreError in
-        continuation.resume(
-            throwing: .general(
-                title: coreError?.errorTitle,
-                description: coreError?.errorDescription
-            )
-        )
-    }
 
-    operation?.failHandler = { _ in
-        continuation.resume(throwing: .general(title: nil, description: nil))
-        return true
-    }
+(lint mode - no files will be changed.)
 
-    operation?.resultHandler.timeoutHandler = {
-        continuation.resume(throwing: .timeout)
-    }
+/Users/jenkins/workspace/mob-ios/Projects/App/Assets/Sources/IKOImages.swift:771:1: error: (spaceAroundOperators) Add or remove space around operators or delimiters.
 
-    operation?.fieldErrorsHandler = { coreError in
-        continuation.resume(
-            throwing: .fieldErrors(
-                title: coreError?.errorTitle,
-                description: coreError?.errorDescription
-            )
-        )
-    }
-}
+/Users/jenkins/workspace/mob-ios/Projects/App/Assets/Sources/IKOImages.swift:773:1: error: (spaceAroundOperators) Add or remove space around operators or delimiters.
 
+/Users/jenkins/workspace/mob-ios/Projects/App/Assets/Sources/IKOImages.swift:774:1: error: (spaceAroundOperators) Add or remove space around operators or delimiters.
 
-
-
-public enum BehavioralBiometricError: Error, Sendable, Equatable {
-
-    case emptyResponse
-    case sessionInProgress
-    case missingPartnerSessionId
-
-    case timeout
-    case fieldErrors(title: String?, description: String?)
-    case general(title: String?, description: String?)
-
-    case unknown
-}
+/Users/jenkins/workspace/mob-ios/Projects/App/Assets/Sources/IKOImages.swift:775:1: error: (spaceAroundOperators) Add or remove space around operators or delimiters.
