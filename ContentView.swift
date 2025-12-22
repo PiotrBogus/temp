@@ -1,165 +1,31 @@
-import ComposableArchitecture
-@testable import ESim
-import XCTest
 
-@MainActor
-final class ESimActivationReducerTests: XCTestCase {
-
-    // MARK: - onAppear
-
-    func testOnAppear_SystemConfiguratorAvailable() async {
-        let mockManager = ESimProvisioningManagerMock()
-        mockManager.mockIsESimSupported = true
-        mockManager.mockIsConfiguratorAvailable = true
-
-        let store = TestStore(
-            initialState: makeTestState(),
-            reducer: {
-                ESimActivationReducer(
-                    eSimManager: mockManager,
-                    toastManager: ESimToastManagerMock(),
-                    behex: ESimBehexMock()
-                )
-            }
-        )
-
-        await store.send(.onAppear)
-
-        await store.receive(.eSimAvailabilityChecked(.systemConfigurator)) {
-            $0.isSystemConfiguratorAvailable = true
-            $0.isLoading = false
-            $0.destination = .activation("https://test.esim.com/activate")
+import Foundation
+import UIKit
+// Can be removed when we migrate to iOS 17 so we don't need to check if device is iPhone 18 or X
+extension UIDevice {
+    private static let modelsWithoutESimThatSupportiOS16: Set<String> = [
+        "iPhone10,1",
+        "iPhone10,2",
+        "iPhone10,3",
+        "iPhone10,4",
+        "iPhone10,5",
+        "iPhone10,6",
+        "i386",
+        "x86_64",
+        "arm64",
+    ]
+    static func isESimSupported() -> Bool {
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        let machineMirror = Mirror(reflecting: systemInfo.machine)
+        let identifier = machineMirror.children.reduce(into: "") { result, element in
+            guard let value = element.value as? Int8, value != 0 else { return }
+            result.append(String(UnicodeScalar(UInt8(value))))
         }
-    }
-
-    func testOnAppear_ManualESimFlow() async {
-        let mockManager = ESimProvisioningManagerMock()
-        mockManager.mockIsESimSupported = true
-        mockManager.mockIsConfiguratorAvailable = false
-
-        let store = TestStore(
-            initialState: makeTestState(),
-            reducer: {
-                ESimActivationReducer(
-                    eSimManager: mockManager,
-                    toastManager: ESimToastManagerMock(),
-                    behex: ESimBehexMock()
-                )
-            }
-        )
-
-        await store.send(.onAppear)
-
-        await store.receive(.eSimAvailabilityChecked(.manual)) {
-            $0.isSystemConfiguratorAvailable = false
-            $0.isLoading = false
-            $0.destination = nil
-        }
-    }
-
-    func testOnAppear_ESimNotSupported() async {
-        let mockManager = ESimProvisioningManagerMock()
-        mockManager.mockIsESimSupported = false
-
-        let store = TestStore(
-            initialState: makeTestState(),
-            reducer: {
-                ESimActivationReducer(
-                    eSimManager: mockManager,
-                    toastManager: ESimToastManagerMock(),
-                    behex: ESimBehexMock()
-                )
-            }
-        )
-
-        await store.send(.onAppear)
-
-        await store.receive(.eSimAvailabilityChecked(.notSupported)) {
-            $0.destination = .esimNotSupported
-        }
-    }
-
-    // MARK: - onDeviceSettingTap
-
-    func testOnDeviceSettingTap_WithSystemConfigurator() async {
-        var state = makeTestState()
-        state.isSystemConfiguratorAvailable = true
-
-        let store = TestStore(
-            initialState: state,
-            reducer: {
-                ESimActivationReducer(
-                    eSimManager: ESimProvisioningManagerMock(),
-                    toastManager: ESimToastManagerMock(),
-                    behex: ESimBehexMock()
-                )
-            }
-        )
-
-        await store.send(.onDeviceSettingTap) {
-            $0.destination = .activation("https://test.esim.com/activate")
-        }
-    }
-
-    func testOnDeviceSettingTap_WithoutSystemConfigurator() async {
-        var state = makeTestState()
-        state.isSystemConfiguratorAvailable = false
-
-        let store = TestStore(
-            initialState: state,
-            reducer: {
-                ESimActivationReducer(
-                    eSimManager: ESimProvisioningManagerMock(),
-                    toastManager: ESimToastManagerMock(),
-                    behex: ESimBehexMock()
-                )
-            }
-        )
-
-        await store.send(.onDeviceSettingTap) {
-            $0.destination = .phoneSettings
-        }
-    }
-
-    // MARK: - Copy actions
-
-    func testOnActivationCodeCopyTap() async {
-        let store = TestStore(
-            initialState: makeTestState(),
-            reducer: {
-                ESimActivationReducer(
-                    eSimManager: ESimProvisioningManagerMock(),
-                    toastManager: ESimToastManagerMock(),
-                    behex: ESimBehexMock()
-                )
-            }
-        )
-
-        await store.send(.onActivationCodeCopyTap)
-    }
-
-    func testOnSMDPCopyTap() async {
-        let store = TestStore(
-            initialState: makeTestState(),
-            reducer: {
-                ESimActivationReducer(
-                    eSimManager: ESimProvisioningManagerMock(),
-                    toastManager: ESimToastManagerMock(),
-                    behex: ESimBehexMock()
-                )
-            }
-        )
-
-        await store.send(.onSMDPCopyTap)
-    }
-
-    // MARK: - Helpers
-
-    private func makeTestState() -> ESimActivationReducer.State {
-        ESimActivationReducer.State(
-            data: .mock,
-            isLoading: true,
-            isSystemConfiguratorAvailable: false
-        )
+        return !modelsWithoutESimThatSupportiOS16.contains(identifier)
     }
 }
+
+
+/Users/mac.jenkins.ad/workspace/mob-ios/Projects/App/ESim/Sources/Utils/UIDevice+ESim.swift:4:1: error: (docComments) Use doc comments for API declarations, otherwise use regular comments.
+
