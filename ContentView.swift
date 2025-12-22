@@ -1,51 +1,138 @@
-func toggleDimensionOption(
-    dimensionId: String,
-    options: [GenieCommonDomain.Dimension.Option],
-    in state: inout State
-) -> Bool {
-    guard let dimInd = state.dimensions.firstIndex(where: { $0.id == dimensionId }) else {
-        return false
-    }
 
-    let current = state.dimensions[dimInd]
-
-    let updated: GenieCommonDomain.Dimension =
-        current.allowsMultiselect
-        ? handleMultiSelect(current: current, options: options)
-        : handleSingleSelect(current: current, options: options)
-
-    state.dimensions[dimInd] = updated
-    return updated.selectedOptions != current.selectedOptions
-}
-
-
-private func handleMultiSelect(
-    current: GenieCommonDomain.Dimension,
-    options: [GenieCommonDomain.Dimension.Option]
-) -> GenieCommonDomain.Dimension {
-    options.reduce(current) { acc, option in
-        guard current.options.contains(option) else {
-            return acc
+import ComposableArchitecture
+@testable import ESim
+import XCTest
+@MainActor
+final class ESimActivationReducerTests: XCTestCase {
+    // MARK: - onAppear
+    func testOnAppear_SystemConfiguratorAvailable() async {
+        let mockManager = ESimProvisioningManagerMock()
+        mockManager.mockIsESimSupported = true
+        mockManager.mockIsConfiguratorAvailable = true
+        let store = TestStore(
+            initialState: makeTestState(),
+            reducer: {
+                ESimActivationReducer(
+                    eSimManager: mockManager,
+                    toastManager: ESimToastManagerMock(),
+                    behex: ESimBehexMock()
+                )
+            }
+        )
+        await store.send(.onAppear)
+        await store.receive(\.eSimAvailabilityChecked, .systemConfigurator) {
+            $0.isSystemConfiguratorAvailable = true
+            $0.isLoading = false
+            $0.destination = .activation("https://test.esim.com/activate")
         }
-
-        let isAlreadySelected = acc.selectedOptions.contains { $0.id == option.id }
-        return isAlreadySelected ? acc : acc.selectOption(option)
     }
-}
-
-
-private func handleSingleSelect(
-    current: GenieCommonDomain.Dimension,
-    options: [GenieCommonDomain.Dimension.Option]
-) -> GenieCommonDomain.Dimension {
-    options.reduce(current) { acc, option in
-        guard current.options.contains(option) else {
-            return acc
+    func testOnAppear_ManualESimFlow() async {
+        let mockManager = ESimProvisioningManagerMock()
+        mockManager.mockIsESimSupported = true
+        mockManager.mockIsConfiguratorAvailable = false
+        let store = TestStore(
+            initialState: makeTestState(),
+            reducer: {
+                ESimActivationReducer(
+                    eSimManager: mockManager,
+                    toastManager: ESimToastManagerMock(),
+                    behex: ESimBehexMock()
+                )
+            }
+        )
+        await store.send(.onAppear)
+        await store.receive(\.eSimAvailabilityChecked, .manual) {
+            $0.isSystemConfiguratorAvailable = false
+            $0.isLoading = false
+            $0.destination = nil
         }
-
-        let wasSelected = acc.selectedOptions.contains { $0.id == option.id }
-        return wasSelected
-            ? acc.deselectOption(option)
-            : acc.selectOption(option)
+    }
+    func testOnAppear_ESimNotSupported() async {
+        let mockManager = ESimProvisioningManagerMock()
+        mockManager.mockIsESimSupported = false
+        let store = TestStore(
+            initialState: makeTestState(),
+            reducer: {
+                ESimActivationReducer(
+                    eSimManager: mockManager,
+                    toastManager: ESimToastManagerMock(),
+                    behex: ESimBehexMock()
+                )
+            }
+        )
+        await store.send(.onAppear)
+        await store.receive(\.eSimAvailabilityChecked, .notSupported) {
+            $0.destination = .esimNotSupported
+        }
+    }
+    // MARK: - onDeviceSettingTap
+    func testOnDeviceSettingTap_WithSystemConfigurator() async {
+        var state = makeTestState()
+        state.isSystemConfiguratorAvailable = true
+        let store = TestStore(
+            initialState: state,
+            reducer: {
+                ESimActivationReducer(
+                    eSimManager: ESimProvisioningManagerMock(),
+                    toastManager: ESimToastManagerMock(),
+                    behex: ESimBehexMock()
+                )
+            }
+        )
+        await store.send(.onDeviceSettingTap) {
+            $0.destination = .activation("https://test.esim.com/activate")
+        }
+    }
+    func testOnDeviceSettingTap_WithoutSystemConfigurator() async {
+        var state = makeTestState()
+        state.isSystemConfiguratorAvailable = false
+        let store = TestStore(
+            initialState: state,
+            reducer: {
+                ESimActivationReducer(
+                    eSimManager: ESimProvisioningManagerMock(),
+                    toastManager: ESimToastManagerMock(),
+                    behex: ESimBehexMock()
+                )
+            }
+        )
+        await store.send(.onDeviceSettingTap) {
+            $0.destination = .phoneSettings
+        }
+    }
+    // MARK: - Copy actions
+    func testOnActivationCodeCopyTap() async {
+        let store = TestStore(
+            initialState: makeTestState(),
+            reducer: {
+                ESimActivationReducer(
+                    eSimManager: ESimProvisioningManagerMock(),
+                    toastManager: ESimToastManagerMock(),
+                    behex: ESimBehexMock()
+                )
+            }
+        )
+        await store.send(.onActivationCodeCopyTap)
+    }
+    func testOnSMDPCopyTap() async {
+        let store = TestStore(
+            initialState: makeTestState(),
+            reducer: {
+                ESimActivationReducer(
+                    eSimManager: ESimProvisioningManagerMock(),
+                    toastManager: ESimToastManagerMock(),
+                    behex: ESimBehexMock()
+                )
+            }
+        )
+        await store.send(.onSMDPCopyTap)
+    }
+    // MARK: - Helpers
+    private func makeTestState() -> ESimActivationReducer.State {
+        ESimActivationReducer.State(
+            data: .mock,
+            isLoading: true,
+            isSystemConfiguratorAvailable: false
+        )
     }
 }
