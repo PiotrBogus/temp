@@ -1,181 +1,187 @@
-import ComposableArchitecture
-import Testing
-@testable import ESim
+import BehavioralBiometric
+import Foundation
+@preconcurrency import IKOCommon
+import SwinjectAutoregistration
 
-@MainActor
-@Suite("ESimActivationReducer")
-struct ESimActivationReducerTests {
+final class BehavioralBiometricNetworkServiceProvider: BehavioralBiometricNetworkServiceProviding, @unchecked Sendable {
+    private let service: Service
+    private let core: IKOCore
+    private var partnerSessionId: String?
 
-    // MARK: - onAppear
+    init(core: IKOCore = IKOAssembler.resolver~>) {
+        self.core = core
+        service = Service(with: CoreNetworking(core: core))
+    }
 
-    @Suite("onAppear")
-    struct OnAppear {
-
-        @Test("System configurator available → opens activation")
-        func systemConfiguratorAvailable() async {
-            let env = TestEnvironment(
-                isESimSupported: true,
-                isConfiguratorAvailable: true
-            )
-
-            let store = env.makeStore()
-
-            await store.send(.onAppear)
-
-            await store.receive(\.eSimAvailabilityChecked, .systemConfigurator) {
-                $0.isSystemConfiguratorAvailable = true
-                $0.isLoading = false
-                $0.destination = .activation(env.activationURL)
+    func changeBehavioralBiometricStatus(
+        isEnabled: Bool,
+        mPin: IKOUIPin,
+        agreements: [BehavioralBiometricAgreement]?
+    ) async throws {
+        try await withCheckedThrowingContinuation { [weak self] continuation in
+            guard let castedPin = mPin as? IKOCorePin else {
+                fatalError("Expecting IKOCorePin class")
+            }
+            let params = IKOCoreChangeBehavioralBiometricStateParams()
+            params.enabled = isEnabled
+            params.mPin = castedPin
+            params.agreements = agreements?.compactMap {
+                let agreement = IKOCoreBehavioralBiometricApiAgreement()
+                agreement.consentType = $0.consentType
+                agreement.textConsentId = $0.textConsentId
+                agreement.consent = true
+                return agreement
             }
 
-            #expect(env.behex.events.contains(.ESim_InstallSplash_view_Show))
-            #expect(env.behex.events.contains(.ESim_InstallDetails_view_Show))
-        }
-
-        @Test("eSIM supported but no configurator → manual flow")
-        func manualFlow() async {
-            let env = TestEnvironment(
-                isESimSupported: true,
-                isConfiguratorAvailable: false
-            )
-
-            let store = env.makeStore()
-
-            await store.send(.onAppear)
-
-            await store.receive(\.eSimAvailabilityChecked, .manual) {
-                $0.isSystemConfiguratorAvailable = false
-                $0.isLoading = false
-                $0.destination = nil
+            let operation = self?.core.requestChangeBehavioralBiometricStateWithParams(params) {
+                continuation.resume()
             }
-
-            #expect(env.behex.events.contains(.ESim_InstallDetails_view_Show))
-        }
-
-        @Test("eSIM not supported → not supported screen")
-        func eSimNotSupported() async {
-            let env = TestEnvironment(isESimSupported: false)
-
-            let store = env.makeStore()
-
-            await store.send(.onAppear)
-
-            await store.receive(\.eSimAvailabilityChecked, .notSupported) {
-                $0.destination = .esimNotSupported
-            }
-
-            #expect(env.behex.events.contains(.ESim_InstallError_UnsupportedDevice_view_Show))
+            self?.handleError(for: operation, with: continuation)
+            self?.service.makeRequest(with: operation)
         }
     }
 
-    // MARK: - onDeviceSettingTap
-
-    @Suite("onDeviceSettingTap")
-    struct OnDeviceSettingTap {
-
-        @Test("With system configurator → activation")
-        func withConfigurator() async {
-            let env = TestEnvironment()
-            var state = TestEnvironment.initialState
-            state.isSystemConfiguratorAvailable = true
-
-            let store = env.makeStore(initialState: state)
-
-            await store.send(.onDeviceSettingTap) {
-                $0.destination = .activation(env.activationURL)
+    func getBehavioralBiometricAgreements() async throws -> [BehavioralBiometricAgreement] {
+        try await withCheckedThrowingContinuation { [weak self] continuation in
+            let operation = self?.core.requestGetBehavioralBiometricAgreementsWithCompletion { response in
+                guard let response else {
+                    continuation.resume(throwing: BehavioralBiometricError.emptyResponse)
+                    return
+                }
+                let agreements = response.agreements.compactMap {
+                    BehavioralBiometricAgreement(
+                        textConsentId: $0.textConsentId,
+                        consentType: $0.consentType,
+                        textShort: $0.textShort,
+                        textFull: $0.textFull,
+                        isMandatory: $0.mandatory
+                    )
+                }
+                continuation.resume(returning: agreements)
             }
-
-            #expect(env.behex.events.contains(.ESim_InstallDetails_btn_PhoneSettings))
-        }
-
-        @Test("Without system configurator → phone settings")
-        func withoutConfigurator() async {
-            let env = TestEnvironment()
-            var state = TestEnvironment.initialState
-            state.isSystemConfiguratorAvailable = false
-
-            let store = env.makeStore(initialState: state)
-
-            await store.send(.onDeviceSettingTap) {
-                $0.destination = .phoneSettings
-            }
-
-            #expect(env.behex.events.contains(.ESim_InstallDetails_btn_PhoneSettings))
+            self?.handleError(for: operation, with: continuation)
+            self?.service.makeRequest(with: operation)
         }
     }
 
-    // MARK: - Copy actions
+    func getBehavioralBiometricState() async throws -> BehavioralBiometricState {
+        try await withCheckedThrowingContinuation { [weak self] continuation in
+            let operation = self?.core.requestGetBehavioralBiometricStateWithCompletion { response in
+                guard let response else {
+                    continuation.resume(throwing: BehavioralBiometricError.emptyResponse)
+                    return
+                }
+                continuation.resume(returning: BehavioralBiometricState(
+                    enabled: response.enabled,
+                    agreementsDate: response.agreementsDate,
+                    agreements: response.agreements.compactMap {
+                        BehavioralBiometricAgreement(
+                            textConsentId: $0.textConsentId,
+                            consentType: $0.consentType,
+                            textShort: $0.textShort,
+                            textFull: $0.textFull,
+                            isMandatory: $0.mandatory
+                        )
+                    }
+                ))
+            }
+            self?.handleError(for: operation, with: continuation)
+            self?.service.makeRequest(with: operation)
+        }
+    }
 
-    @Suite("Copy actions")
-    struct CopyActions {
+    func startSession(latitude: String?, longitude: String?) async throws -> BehavioralBiometricStartSession {
+        guard partnerSessionId == nil else {
+            throw BehavioralBiometricError.sessionInProgress
+        }
+        return try await withCheckedThrowingContinuation { [weak self] continuation in
+            let params = IKOCoreStartBehavioralBiometricSessionParams()
+            params.latitude = latitude
+            params.longitude = longitude
 
-        @Test("Activation code copy shows toast")
-        func activationCodeCopy() async {
-            let env = TestEnvironment()
-            let store = env.makeStore()
+            let operation = self?.core.requestStartBehavioralBiometricSessionWithParams(params) { response in
+                guard let response else {
+                    continuation.resume(throwing: BehavioralBiometricError.emptyResponse)
+                    return
+                }
+                self?.partnerSessionId = response.partnerSessionId
+                continuation.resume(returning: BehavioralBiometricStartSession(
+                    enabled: response.enabled,
+                    cssId: response.cssId
+                ))
+            }
+            self?.handleError(for: operation, with: continuation)
+            self?.service.makeRequest(with: operation)
+        }
+    }
 
-            await store.send(.onActivationCodeCopyTap)
+    func stopSession() async throws {
+        guard let partnerSessionId else {
+            throw BehavioralBiometricError(type: .missingPartnerSessionId)
+        }
+        try await withCheckedThrowingContinuation { [weak self] continuation in
+            let params = IKOCoreStopBehavioralBiometricSessionParams()
+            params.partnerSessionId = partnerSessionId
+            self?.partnerSessionId = nil
+            let operation = self?.core.requestStopBehavioralBiometricSessionWithParams(params) {
+                continuation.resume()
+            }
+            self?.handleError(for: operation, with: continuation)
+            self?.service.makeRequest(with: operation)
+        }
+    }
 
-            #expect(env.toast.didShowToast)
-            #expect(env.behex.events.contains(.ESim_InstallDetails_ActivationCode_btn_Copy))
+    private func handleError<T>(for operation: IKOCoreOperation?, with continuation: CheckedContinuation<T, BehavioralBiometricError>) {
+        operation?.errorHandler = { coreError in
+            let error = BehavioralBiometricError(
+                type: .generalError,
+                title: coreError?.errorTitle,
+                description: coreError?.errorDescription
+            )
+            continuation.resume(throwing: error)
         }
 
-        @Test("SMDP address copy shows toast")
-        func smdpCopy() async {
-            let env = TestEnvironment()
-            let store = env.makeStore()
+        operation?.failHandler = { _ in
+            let error = BehavioralBiometricError(
+                type: .generalError
+            )
+            continuation.resume(throwing: error)
+            return true
+        }
 
-            await store.send(.onSMDPCopyTap)
+        operation?.resultHandler.timeoutHandler = {
+            let error = BehavioralBiometricError(
+                type: .timeout
+            )
+            continuation.resume(throwing: error)
+        }
 
-            #expect(env.toast.didShowToast)
-            #expect(env.behex.events.contains(.ESim_InstallDetails_AddressSMDP_btn_Copy))
+        operation?.fieldErrorsHandler = { coreError in
+            let error = BehavioralBiometricError(
+                type: .fieldErrors,
+                title: coreError?.errorTitle,
+                description: coreError?.errorDescription
+            )
+            continuation.resume(throwing: error)
         }
     }
 }
 
 
+import Foundation
 
+public struct BehavioralBiometricError: Error, Sendable, Equatable {
+    let type: BehavioralBiometricErrorType
+    let title: String?
+    let description: String?
 
-@MainActor
-private struct TestEnvironment {
-
-    static let activationURL = "https://test.esim.com/activate"
-
-    static let initialState = ESimActivationReducer.State(
-        data: .mock,
-        isLoading: true,
-        isSystemConfiguratorAvailable: false
-    )
-
-    let manager: ESimProvisioningManagerMock
-    let behex: ESimBehexMock
-    let toast: ESimToastManagerMock
-
-    init(
-        isESimSupported: Bool = true,
-        isConfiguratorAvailable: Bool = false
+    public init(
+        type: BehavioralBiometricErrorType,
+        title: String? = nil,
+        description: String? = nil
     ) {
-        let manager = ESimProvisioningManagerMock()
-        manager.mockIsESimSupported = isESimSupported
-        manager.mockIsConfiguratorAvailable = isConfiguratorAvailable
-
-        self.manager = manager
-        self.behex = ESimBehexMock()
-        self.toast = ESimToastManagerMock()
-    }
-
-    func makeStore(
-        initialState: ESimActivationReducer.State = Self.initialState
-    ) -> TestStore<ESimActivationReducer.State, ESimActivationReducer.Action> {
-        TestStore(
-            initialState: initialState,
-            reducer: {
-                ESimActivationReducer(
-                    eSimManager: manager,
-                    toastManager: toast,
-                    behex: behex
-                )
-            }
-        )
+        self.type = type
+        self.title = title
+        self.description = description
     }
 }
