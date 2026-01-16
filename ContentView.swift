@@ -1,602 +1,2426 @@
-//
-//  IntlMarketTrackerChartContainerFeature.swift
-//  KpiIntlMarketTracker
-//
-//  Created by Daniel Satin on 09.11.2025.
-//
-
-import ComposableArchitecture
-import GenieCommonPresentation
-import GenieCommonDomain
-
-@Reducer
-public struct IntlMarketTrackerChartContainerFeature: Sendable {
-    public init() {}
-
-    @ObservableState
-    public struct State: Equatable, Sendable {
-        var mode: Mode = .chart
-        var chart: ChartComponentFeature.State
-        var table: ChartTableComponentFeature.State
-
-        public init(
-            selectors: [SelectorParamEntity]
-        ) {
-            self.chart = createDefaultChartComponent(selectors: selectors)
-            self.table = ChartTableComponentFeature.State(selectors: selectors)
-        }
-    }
-
-    public enum Action: BindableAction, Sendable {
-        case binding(BindingAction<State>)
-        case chart(ChartComponentFeature.Action)
-        case closeButtonTapped
-        case onAppear
-        case table(ChartTableComponentFeature.Action)
-    }
-
-    @Dependency(\.dismiss) var dismiss
-
-    public var body: some ReducerOf<Self> {
-        BindingReducer()
-
-        Scope(state: \.chart, action: \.chart) {
-            ChartComponentFeature()
-        }
-        .dependency(\.chartComponentFeatureClient, ChartComponentFeatureClient(
-            fetchChartData: { selectors in
-                @Dependency(\.intlMarketTrackerChartComponentFeatureClient) var client
-                return try await client.fetchChartData(selectors)
-            }))
-
-        Scope(state: \.table, action: \.table) {
-            ChartTableComponentFeature()
-        }
-
-        Reduce { state, action in
-            switch action {
-            case .binding:
-                return .none
-
-            case let .chart(.delegate(.selectorsToSyncChanged(selectorsToSync))):
-                return reduce(into: &state, action: .table(.selectorsToSyncChanged(selectorsToSync)))
-
-            case .chart:
-                return .none
-
-            case .closeButtonTapped:
-                return .run { _ in await dismiss() }
-
-            case .onAppear:
-                return .none
-
-            case let .table(.delegate(.selectorsToSyncChanged(selectorsToSync))):
-                return reduce(into: &state, action: .chart(.selectorsToSyncChanged(selectorsToSync)))
-
-            case .table:
-                return .none
-            }
-        }
-    }
-}
-
-extension IntlMarketTrackerChartContainerFeature.State {
-    enum Mode: String, Equatable, Hashable, Sendable, Identifiable, CaseIterable {
-        case chart
-        case table
-        public var id: Self { self }
-    }
-}
-
-//TODO: CHARTS - Refactor this not to be here freely
-func createDefaultChartComponent(selectors: [SelectorParamEntity]) -> ChartComponentFeature.State {
-    let chartContainerState = ChartTableToolbarFeatureWithChartData.State()
-
-    let chartState = ChartFeature<String>.State(
-        id: "intl-market-tracker-chart",
-        chartData: [],
-        legendItems: [],
-        formatterConfig: ChartFormatterConfig.createMock()
-    )
-
-    return ChartComponentFeature.State(
-        chart: chartState,
-        chartContainer: chartContainerState,
-        chartItems: [],
-        allPossibleLegends: [],
-        inputSelectors: selectors
-    )
-}
-
-
-
-
-import ComposableArchitecture
-import Foundation
-import GenieCommonDomain
-
-@Reducer
-public struct ChartTableComponentFeature: Sendable {
-    public typealias RowID = Int
-    public typealias ValueID = Int
-    public typealias HeaderID = Int
-
-    public typealias TableFeature = KpiTableFeature<RowID, ValueID>
-    public typealias HeaderFeature = IntlMarketTrackerHeaderFeature<HeaderID>
-
-    public init() {}
-
-    @ObservableState
-    public struct State: Equatable, Sendable {
-        @Presents var error: ErrorFeature.State?
-
-        @Shared(.deviceOrientation) var deviceOrientation: DeviceOrientation = .unknown
-        @Shared var isLoading: Bool
-        @Shared var headerFilterOptions: IdentifiedArrayOf<OptionPickerRowFeature<Int>.State>
-        @Shared var selectedSelectors: [Int: String] /// [selectorId : selectedFilterId]
-
-        var table: TableFeature.State?
-        var header: HeaderFeature.State?
-        var headerSelectorPanel: ChartTableFilterPanelFeature.State?
-
-        var title: String = "INTL Market Tracker"
-        var isBookmarkExists: Bool = false
-
-        var dataFormats: [DataFormatEntity]?
-        var marketTrackerKpiData: MarketTrackerKpiDataEntity?
-        var inputSelectors: [SelectorParamEntity] = []
-        var selectedHeaders: [Int: Int] = [:] /// [selected buttonIndex : columnId]
-
-        var chartFilterSelectors: [Selectors] = []
-        var selectedColumnsSelectors: [Int] = []
-
-        var sortableColumns: [ColumnDefinition] = []
-        var sortingCriteria: SortingCriteria = .init(order: .descending)
-
-        var navigationTitle: String {
-            "INTL Market Tracker"
-        }
-
-        let pageIdParameter: String = "page_id"
-
-        public init(selectors: [SelectorParamEntity]) {
-            self._isLoading = Shared(value: false)
-            self._headerFilterOptions = Shared(value: [])
-            self._selectedSelectors = Shared(value: [:])
-            self.inputSelectors = selectors
-        }
-    }
-
-    public enum Action: Sendable {
-        case marketTrackerDataFetched(MarketTrackerKpiDataEntity, [DataFormatEntity])
-        case dataMapped([KpiRowFeature<RowID, ValueID>.State], HeaderFeature.State)
-        case delegate(Delegate)
-        case deviceOrientationChanged
-        case error(ErrorFeature.Action)
-        case header(HeaderFeature.Action)
-        case headerSelectorPanel(ChartTableFilterPanelFeature.Action)
-        case onError(Error)
-        case onFirstAppear
-        case selectorsChanged(IdentifiedArrayOf<OptionPickerRowFeature<Int>.State>)
-        case selectorsToSyncChanged([Selectors])
-        case table(TableFeature.Action)
-    }
-
-    @Dependency(\.chartTableComponentClient) private var chartTableComponentClient
-    @Dependency(\.logger) private var logger
-    @Dependency(\.kpiDataMapper) private var kpiDataMapper
-    @Dependency(\.kpiRowMapper) private var kpiRowMapper
-    @Dependency(\.chartOutputMapper) var chartOutputMapper
-    @Dependency(\.columnWidthHelper) private var columnWidthHelper
-
-    public var body: some Reducer<State, Action> {
-        Reduce { state, action in
-            switch action {
-            case let .marketTrackerDataFetched(marketTrackerKpiData, dataFormats):
-                state.marketTrackerKpiData = marketTrackerKpiData
-                state.dataFormats = dataFormats
-                
-                /// InputSelectors are initialized
-                if state.inputSelectors.count < 2 {
-                    state.inputSelectors.append(contentsOf: marketTrackerKpiData.selectors
-                        .filter { $0.name != state.pageIdParameter } // Exclude page_id
-                        .map { SelectorParamEntity(selectorName: $0.name, selectorValue: $0.defaultValue) }
-                    )
-                }
-                
-                if let columnSelect = marketTrackerKpiData.columnSelector, !columnSelect.isEmpty {
-                    state.selectedColumnsSelectors = columnSelect.first?.defaultColumnsIds ?? []
-                }
-
-                /// Update picker options with labels
-                state.$headerFilterOptions.withLock {
-                    $0 = kpiDataMapper.updateHeaderFilterOptions(
-                        kpiData: marketTrackerKpiData,
-                        isLandscape: state.deviceOrientation.isLandscape,
-                        userSelectedFilters: state.selectedSelectors
-                    )
-                }
-
-                guard let (rows, headerState) = convertDataToStates(
-                    state: &state
-                ) else {
-                    return .none
-                }
-
-                return .run { send in
-                    let (updatedRows, updatedheaderState) = await calculateWidth(rows: rows, headerState: headerState)
-                    await send(.dataMapped(updatedRows, updatedheaderState))
-                }
-
-            case let .dataMapped(rowStates, headerState):
-                state.$isLoading.withLock { $0 = false }
-                state.table = TableFeature.State(rows: .init(uniqueElements: rowStates))
-                state.header = headerState
-                
-                guard let kpiData = state.marketTrackerKpiData,
-                      let layout = kpiDataMapper.currentLayout(for: kpiData, isLandscape: state.deviceOrientation.isLandscape)
-                else {
-                    return .none
-                }
-
-                let filterSelectors = kpiDataMapper.convertSelectorsToDimensions(
-                    selectors: state.marketTrackerKpiData?.selectors,
-                    selectorsRowContent: layout.selectorsRowContent,
-                    inputSelectors: state.inputSelectors
-                ) ?? []
-
-
-                var brandSelectors: [Selectors] = []
-                if let colSelector = state.marketTrackerKpiData?.columnSelector?.first,
-                   colSelector.options.count > 0,
-                   let columns = state.marketTrackerKpiData?.tables.main.columns {
-                    let colFilters = kpiDataMapper.convertColumnSelectorToFilters(
-                        columnSelector: colSelector,
-                        columns: columns,
-                        selectedColumnIds: state.selectedColumnsSelectors
-                    )
-                    brandSelectors.append(contentsOf: colFilters)
-                }
-
-                state.headerSelectorPanel = ChartTableFilterPanelFeature.State(
-                    selectors: filterSelectors,
-                    brandSelectors: brandSelectors
-                )
-                return .none
-
-            case .deviceOrientationChanged:
-                guard let (rows, headerState) = convertDataToStates(
-                    state: &state
-                ) else {
-                    return .none
-                }
-                return .run { send in
-                    let (updatedRows, updatedheaderState) = await calculateWidth(rows: rows, headerState: headerState)
-                    await send(.dataMapped(updatedRows, updatedheaderState))
-                }
-
-            case let .header(.buttons(.element(id: buttonID, action: .delegate(.tapped(optionId))))),
-                let .header(.columnGroupButtons(.element(id: _, action: .delegate(.tapped(buttonID, optionId))))):
-                logger.debug("Tapped header button with ID: \(buttonID) \(optionId)")
-                let (isAssociatedIdSelected, updatedSelectors, selectedHeaders) = kpiDataMapper.headerItemSelected(
-                    isLandscape: state.deviceOrientation.isLandscape,
-                    buttonId: buttonID, optionId: optionId,
-                    marketTrackerKpiEntity: state.marketTrackerKpiData,
-                    selectors: state.inputSelectors
-                )
-                if isAssociatedIdSelected {
-                    /// AssociatedIdSelected -> make a new api call
-                    state.inputSelectors = updatedSelectors
-                    return fetchData(
-                        state: &state,
-                        selectors: updatedSelectors
-                    )
-                } else {
-                    /// ColumnId is selected from header -> update table
-                    state.selectedHeaders.merge(selectedHeaders) { _, new in new }
-                    guard let (rows, headerState) = convertDataToStates(
-                        state: &state
-                    ) else {
-                        return .none
-                    }
-                    return .run { send in
-                        let (updatedRows, updatedheaderState) = await calculateWidth(rows: rows, headerState: headerState)
-                        await send(.dataMapped(updatedRows, updatedheaderState))
-                    }
-                }
-            case let .headerSelectorPanel(.delegate(.selectorsChangedTo(selectors))):
-                let didChange = handleSelectorsChanged(
-                    newSelectors: selectors,
-                    state: &state,
-                    originalSelectors: state.marketTrackerKpiData?.selectors
-                )
-
-                guard didChange else {
-                    return .none
-                }
-                return .merge(
-                    fetchData(state: &state, selectors: state.inputSelectors),
-                    .run { send in
-                        await send(.delegate(.selectorsToSyncChanged(selectors)))
-                    }
-                )
-
-            case let .headerSelectorPanel(.delegate(.brandSelectorsChangedTo(selectors))):
-                print(selectors)
-                state.selectedColumnsSelectors = []
-                if let selectedOptionArr = selectors.first?.selectedOptions {
-                    selectedOptionArr.forEach { opt in
-                        if let optionId = Int(opt.id) {
-                            state.selectedColumnsSelectors.append(optionId)
-                        }
-                    }
-                }
-                guard let (rows, headerState) = convertDataToStates(
-                    state: &state
-                ) else {
-                    return .none
-                }
-                return .run { send in
-                    let (updatedRows, updatedheaderState) = await calculateWidth(rows: rows, headerState: headerState)
-                    await send(.dataMapped(updatedRows, updatedheaderState))
-                }
-
-            case .error(.delegate(.retry)):
-                state.error = nil
-                return fetchData(
-                    state: &state,
-                    selectors: state.inputSelectors
-                )
-
-            case .error:
-                return .none
-
-            case let .onError(error):
-                state.$isLoading.withLock { $0 = false }
-                state.error = .build(from: error)
-                return .none
-
-            case .onFirstAppear:
-                guard state.marketTrackerKpiData == nil else {
-                    if !state.chartFilterSelectors.isEmpty {
-                        let didChange = handleSelectorsChanged(
-                            newSelectors: state.chartFilterSelectors,
-                            state: &state,
-                            originalSelectors: state.marketTrackerKpiData?.selectors
-                        )
-
-                        if didChange {
-                            return fetchData(state: &state, selectors: state.inputSelectors)
-                        }
-                    }
-                    return .none
-                }
-
-                return .merge(
-                    fetchData(state: &state, selectors: state.inputSelectors),
-                    observeDeviceOrientation(state.$deviceOrientation),
-                    observeHeaderFilterOptions(state.$headerFilterOptions)
-                )
-
-            case let .selectorsChanged(optionPickerRows):
-                logger.debug("Refreshing data due to changed selectors. Selectors: \(optionPickerRows)")
-                updateStateByChangedSelectorsFetchData(
-                    state: &state,
-                    updatedSelectedFilters: optionPickerRows
-                )
-
-                return fetchData(
-                    state: &state,
-                    selectors: state.inputSelectors
-                )
-
-            case let .selectorsToSyncChanged(selectorsToSync):
-                state.chartFilterSelectors = selectorsToSync
-                logger.debug("Refreshing data due to changed selectors. Selectors: \(selectorsToSync)")
-                return .none
-
-            case .table(.delegate(.onRefresh)):
-                logger.debug("Pull to refresh invoked")
-                return fetchData(
-                    state: &state,
-                    selectors: state.inputSelectors
-                )
-
-            case .table(.rows(.element(id: let rowID, action: .delegate(.rowTapped)))):
-                logger.debug("Tapped row button with ID: \(rowID)")
-                return .none
-
-            case .table(.rows(.element(id: let rowID, action: .delegate(.chartButtonTapped)))):
-                logger.debug("Tapped chart button with ID: \(rowID)")
-                return .send(.delegate(.chartButtonTapped(rowID)))
-
-            case .table(
-                .rows(
-                    .element(
-                        id: let rowID,
-                        action: .values(.element(id: let valueID, action: .delegate(.tapped)))
-                    )
-                )
-            ):
-                logger.debug("Tapped value button with ID: \(valueID) in row with ID: \(rowID)")
-                return .none
-
-            case .delegate, .header, .headerSelectorPanel, .table:
-                return .none
-            }
-        }
-        .ifLet(\.table, action: \.table) { TableFeature() }
-        .ifLet(\.header, action: \.header) { HeaderFeature() }
-        .ifLet(\.headerSelectorPanel, action: \.headerSelectorPanel) { ChartTableFilterPanelFeature() }
-        .ifLet(\.error, action: \.error) { ErrorFeature() }
-    }
-}
-
-// MARK: - Effects
-
-extension ChartTableComponentFeature {
-    private func observeDeviceOrientation(_ shared: Shared<DeviceOrientation>) -> Effect<Action> {
-        .run { send in
-            for await _ in shared.publisher.dropFirst().values {
-                await send(.deviceOrientationChanged)
-            }
-        }
-        .cancellable(id: CancelID.deviceOrientationObserver, cancelInFlight: true)
-    }
-
-    private func observeHeaderFilterOptions(
-        _ shared: Shared<IdentifiedArrayOf<OptionPickerRowFeature<Int>.State>>
-    ) -> Effect<Action> {
-        .run { send in
-            for await options in shared.publisher.dropFirst().removeDuplicates().values {
-                await send(.selectorsChanged(options))
-            }
-        }
-        .cancellable(id: CancelID.headerFilterOptionsObserver, cancelInFlight: true)
-    }
-
-    private func fetchData(
-        state: inout State,
-        selectors: [SelectorParamEntity]
-    ) -> Effect<Action> {
-        state.$isLoading.withLock { $0 = true }
-        state.selectedHeaders = [:]
-
-        return .run { send in
-            async let marketTrackerKpiData = try await chartTableComponentClient.fetchTableData(selectors: selectors)
-            async let fetchedDataFormats = try chartTableComponentClient.fetchDataFormats()
-            let _ = try await (fetchedDataFormats, marketTrackerKpiData)
-            try await send(.marketTrackerDataFetched(marketTrackerKpiData, fetchedDataFormats))
-        } catch: { error, send in
-            await send(.onError(error))
-        }
-    }
-    
-    private func calculateWidth(
-        rows: [KpiRowFeature<Int, Int>.State],
-        headerState: HeaderFeature.State
-    ) async -> ([KpiRowFeature<RowID, ValueID>.State], HeaderFeature.State) {
-        var rowsState = rows
-        var headersState = headerState
-        
-        let calculations = await columnWidthHelper.calculateWidths(rows: rows, headerButtons: headerState.buttons)
-    
-        rowsState = rowsState.map { row in
-            var row = row
-            row.setColumnWidths(columnWidths: calculations)
-            return row
-        }
-        
-        headersState.setColumnWidths(columnWidths: calculations)
-        
-        return (rowsState, headersState)
-    }
-    
-    func handleSelectorsChanged(
-        newSelectors: [FilterWithOptions],
-        state: inout State,
-        originalSelectors: [SelectorEntity]?
-    ) -> Bool {
-        guard let originalSelectors, !originalSelectors.isEmpty else { return false }
-
-        var didChange = false
-
-        for newSelector in newSelectors {
-            // Match FilterWithOptions -> SelectorEntity (id types might differ)
-            guard let original = originalSelectors.first(where: { String(describing: $0.id) == newSelector.id }) else {
-                continue
-            }
-
-            let name = original.name
-            let newValue = newSelector.selectedOptions.first?.id ?? ""
-
-            // Update existing input selector (match by selectorName)
-            if let idx = state.inputSelectors.firstIndex(where: { $0.selectorName == name }) {
-                let oldValue = state.inputSelectors[idx].selectorValue ?? ""
-                if oldValue != newValue {
-                    didChange = true
-                    state.inputSelectors[idx].selectorValue = newValue
-                }
-            } else {
-                // If it's not there yet, add it (counts as a change if you want to refetch)
-                state.inputSelectors.append(
-                    SelectorParamEntity(selectorName: name, selectorValue: newValue)
-                )
-                didChange = true
-            }
-        }
-
-        return didChange
-    }
-
-
-
-    private func updateStateByChangedSelectorsFetchData(
-        state: inout State,
-        updatedSelectedFilters: IdentifiedArrayOf<OptionPickerRowFeature<Int>.State>
-    ) {
-        state.$headerFilterOptions.withLock { $0 = updatedSelectedFilters }
-        /// Update inputSelectors according to headerFilterOptions and kpi metadata
-        state.inputSelectors = kpiDataMapper.updateInputSelectors(
-            existingSelectors: state.inputSelectors,
-            headerFilterOptions: state.headerFilterOptions,
-            kpiData: state.marketTrackerKpiData,
-            selectedSelectors: state.selectedSelectors
-        )
-    }
-
-    private func convertDataToStates(
-        state: inout State,
-    ) -> ([KpiRowFeature<RowID, ValueID>.State], HeaderFeature.State)? {
-        guard let kpiData = state.marketTrackerKpiData,
-              let dataFormats = state.dataFormats,
-              let layout = kpiDataMapper.currentLayout(for: kpiData, isLandscape: state.deviceOrientation.isLandscape),
-              let firstColumnId = kpiData.tables.main.columns.first?.id
-        else {
-            return .none
-        }
-
-        let (headerButtons, columnGroupButtons, headerSegments, lineIndexes, initialVisibleColumnIds) =
-        kpiDataMapper.convertDataToStatesAndHeaderElements(currentLayout: layout,
-                                                           marketTrackerKpiData: kpiData,
-                                                           selectedHeaders: state.selectedHeaders,
-                                                           selectedColumnsSelectors: state.selectedColumnsSelectors)
-
-        var sortableColumns: [ColumnDefinition] = []
-        for column in kpiData.tables.main.columns {
-            if initialVisibleColumnIds.contains(column.id), column.sortable {
-                let definition = ColumnDefinition(id: column.id, title: column.title)
-                sortableColumns.append(definition)
-            }
-        }
-        state.sortableColumns = sortableColumns
-
-
-        let headerState = IntlMarketTrackerHeaderFeature<Int>.State(buttons: headerButtons,
-                                                                    columnGroupButtons: columnGroupButtons,
-                                                                    segments: headerSegments,
-                                                                    lineIndexes: lineIndexes)
-        let rows = kpiRowMapper.convertRows(from: kpiData,
-                                            dataFormats: dataFormats,
-                                            selectedColumnIds: initialVisibleColumnIds,
-                                            firstColumnId: firstColumnId,
-                                            lineIndexes: lineIndexes,
-                                            sortingCriteria: state.sortingCriteria)
-
-        return (rows, headerState)
-    }
-}
-
-extension ChartTableComponentFeature.Action {
-    public enum Delegate: Equatable, Sendable {
-        case chartButtonTapped(ChartTableComponentFeature.RowID)
-        case selectorsToSyncChanged([Selectors]) //Replace by real filter object
-        case selectorsButtonTapped(SelectorsFilterFeature.State)
-        case sortingButtonTapped
-    }
-}
-
-private enum CancelID {
-    case deviceOrientationObserver
-    case headerFilterOptionsObserver
-}
+// swiftlint:disable file_length
+import ProjectDescription
+import ProjectDescriptionHelpers
+
+let project = Project.app(
+    name: "App",
+    version: (marketing: "3.0.0", build: "3.0.0"),
+    targets: [
+        .app(
+            name: "IKO",
+            additionalSources: [
+                "IKO/Resources/en.lproj/Intents.intentdefinition",
+                .glob("IKO/Resources/**/Intents.strings"),
+                .glob("IKOPushNotificationService/Sources/Parser/**"),
+                .glob("IKOPushNotificationService/Sources/Serializer/**"),
+                .glob("IKOPushNotificationService/Sources/Mapper/**"),
+                "IKOPushNotificationService/Sources/IKOCMSOperation.mm",
+                "IKOPushNotificationService/Sources/IKONotificationImageStorage.m",
+            ],
+            additionalTestSources: [
+                "IKO/Resources/en.lproj/Intents.intentdefinition",
+                .glob("IKO/Resources/**/Intents.strings"),
+            ],
+            dependencies: [
+                .target(name: "FoundationExtensions"),
+                .target(name: "Assembly"),
+                .target(name: "AccountDetails"),
+                .target(name: "AccountHolds"),
+                .target(name: "AdditionalAuthMethodList"),
+                .target(name: "AdditionalVerification"),
+                .target(name: "Adverts"),
+                .target(name: "Agreements"),
+                .target(name: "AppStateContext"),
+                .target(name: "AnalyticsService"),
+                .target(name: "AppVersionInfo"),
+                .target(name: "AppState"),
+                .target(name: "Authorization"),
+                .target(name: "Autosaving"),
+                .target(name: "BalanceSettings"),
+                .target(name: "BatchTransfers"),
+                .target(name: "BehavioralBiometric"),
+                .target(name: "BehavioralBiometricLogger"),
+                .target(name: "Behex"),
+                .target(name: "Blik"),
+                .target(name: "Blik1CC"),
+                .target(name: "BlikComponents"),
+                .target(name: "BlikP2PR"),
+                .target(name: "BlocksKit"),
+                .target(name: "Cards"),
+                .target(name: "CardsSubscriptions"),
+                .target(name: "CarPlayParkings"),
+                .target(name: "ChangePassword"),
+                .target(name: "CodeScanner"),
+                .target(name: "CommonModels"),
+                .target(name: "Complaints"),
+                .target(name: "Confirmation"),
+                .target(name: "ConfirmationCommon"),
+                .target(name: "Contact"),
+                .target(name: "ControllerCreationItem"),
+                .target(name: "ContextSwitch"),
+                .target(name: "DashboardComponents"),
+                .target(name: "DashboardLoggedIn"),
+                .target(name: "DateUtils"),
+                .target(name: "DebitCardCurrencyServices"),
+                .target(name: "Deposits"),
+                .target(name: "DiscreetMode"),
+                .target(name: "DiscreetModeInterface"),
+                .target(name: "Dispositions"),
+                .target(name: "DocumentViewer"),
+                .target(name: "Events"),
+                .target(name: "Environment"),
+                .target(name: "ESim"),
+                .target(name: "FilesUpload"),
+                .target(name: "ForeignCommon"),
+                .target(name: "FormComponents"),
+                .target(name: "Gold"),
+                .target(name: "GreetingManager"),
+                .target(name: "GsmPayments"),
+                .target(name: "Highways"),
+                .target(name: "IdScannerSDK"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOContexts"),
+                .target(name: "IKOIntentHandler"),
+                .target(name: "IKOIntentHandlerUI"),
+                .target(name: "IKOPushContentExtension"),
+                .target(name: "IKOPushNotificationService"),
+                .target(name: "IKOSettings"),
+                .target(name: "Inbox"),
+                .target(name: "Insurances"),
+                .target(name: "JuniorAffairs"),
+                .target(name: "LabelsDefinitions"),
+                .target(name: "Labels"),
+                .target(name: "Loans"),
+                .target(name: "Logger"),
+                .target(name: "Login"),
+                .target(name: "LoginInterface"),
+                .target(name: "Meetings"),
+                .target(name: "MobileAuth"),
+                .target(name: "MoneyBoxesLegacy"),
+                .target(name: "MoreMenu"),
+                .target(name: "MVVM"),
+                .target(name: "NetworkModule"),
+                .target(name: "CrashReporting"),
+                .target(name: "MoreMenuComponents"),
+                .target(name: "Multisignature"),
+                .target(name: "MyBank"),
+                .target(name: "MyBankComponents"),
+                .target(name: "MyData"),
+                .target(name: "Offers"),
+                .target(name: "OfflineMode"),
+                .target(name: "ParkingPlaces"),
+                .target(name: "PartnerAbc"),
+                .target(name: "PersistentStorage"),
+                .target(name: "PinService"),
+                .target(name: "PkoIdVerification"),
+                .target(name: "Places"),
+                .target(name: "PreloginDashboard"),
+                .target(name: "Preonboarding"),
+                .target(name: "ProductsComponents"),
+                .target(name: "Reachability"),
+                .target(name: "Recipients"),
+                .target(name: "RegistrationContext"),
+                .target(name: "Redirects"),
+                .target(name: "Restrictions"),
+                .target(name: "ReorderableLayout"),
+                .target(name: "ScreenInfoProvider"),
+                .target(name: "Session"),
+                .target(name: "StandingOrders"),
+                .target(name: "SubmittedDispositions"),
+                .target(name: "Talk2IKO"),
+                .target(name: "Transfers"),
+                .target(name: "TransactionsToApprove"),
+                .target(name: "TransportServices"),
+                .target(name: "TransportTickets"),
+                .target(name: "UIComponents"),
+                .target(name: "UIKitPresentationContext"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UncompletedTransfers"),
+                .target(name: "UncompletedTransfersService"),
+                .target(name: "UserContext"),
+                .target(name: "UniversalLink"),
+                .target(name: "UniversalSearch"),
+                .target(name: "VasCoin"),
+                .target(name: "ExchangeRates"),
+                .target(name: "WebView"),
+                .target(name: "Widgets"),
+                .target(name: "ExternalBrowserMapProvider"),
+                .external(name: "DesignSystem"),
+                .xcframework(path: .relativeToRoot("ThirdPartyModules/finanteq-ocr-sdk/FtqOcrInvoice.xcframework")),
+                .xcframework(path: .relativeToRoot("ThirdPartyModules/finanteq-ocr-sdk/FtqOcrInvoicePayment.xcframework")),
+                .xcframework(path: .relativeToRoot("ThirdPartyModules/finanteq-ocr-sdk/FtqOcrInvoicePaymentFromImage.xcframework")),
+                .xcframework(path: .relativeToRoot("ThirdPartyModules/finanteq-ocr-sdk/FtqResizeViewOnTouch.xcframework")),
+                .xcframework(path: .relativeToRoot("ThirdPartyModules/finanteq-ocr-sdk/FtqStandardIdentifiers.xcframework")),
+            ],
+            testDependencies: [
+                .target(name: "SessionTestingHelpers"),
+                .target(name: "UserContextTestingHelpers"),
+                .external(name: "Quick"),
+                .external(name: "Nimble"),
+            ]
+        ),
+        .widgetExtension(
+            name: "Widgets",
+            bundleIdSufix: "widgets",
+            dependencies: [
+                .sdk(name: "SwiftUI", type: .framework),
+                .sdk(name: "WidgetKit", type: .framework),
+                .target(name: "Assets"),
+                .target(name: "IKOCommon"),
+                .external(name: "DesignSystemTokens"),
+            ]
+        ),
+        .legacyExtension(
+            name: "IKOPushNotificationService",
+            bundleIdSufix: "pushservice",
+            entitlements: .file(path: "IKOPushNotificationService/IKOPushNotificationService.entitlements"),
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "BlocksKit"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "NetworkModule"),
+                .target(name: "PersistentStorage"),
+                .external(name: "DesignSystemTokens"),
+                .sdk(name: "UserNotifications", type: .framework, status: .required),
+            ],
+            customSettings: [
+                "GCC_PREFIX_HEADER": "IKOPushNotificationService/IKOPushNotificationService-Prefix.pch",
+            ]
+        ),
+        .legacyExtension(
+            name: "IKOPushContentExtension",
+            bundleIdSufix: "pushcontent",
+            additionalSources: [
+                .glob("IKOPushNotificationService/Sources/Parser/**"),
+                .glob("IKOPushNotificationService/Sources/Serializer/**"),
+                .glob("IKOPushNotificationService/Sources/Mapper/**"),
+                "IKOPushNotificationService/Sources/IKONotificationAttachmentProvider.m",
+                "IKOPushNotificationService/Sources/IKONotificationImageStorage.m",
+                "IKOPushNotificationService/Sources/IKOPushNotificationParameters.m",
+            ],
+            resources: [
+                .glob(pattern: "IKOPushContentExtension/Resources/**"),
+            ],
+            entitlements: .file(path: "IKOPushContentExtension/IKOPushContentExtension.entitlements"),
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "BlocksKit"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "NetworkModule"),
+                .external(name: "DesignSystemTokens"),
+                .sdk(name: "UserNotifications", type: .framework, status: .required),
+                .sdk(name: "UserNotificationsUI", type: .framework, status: .required),
+            ],
+            customSettings: [
+                "GCC_PREFIX_HEADER": "IKOPushContentExtension/IKOPushContentExtension-Prefix.pch",
+            ]
+        ),
+        .legacyExtension(
+            name: "IKOIntentHandler",
+            bundleIdSufix: "intenthandler",
+            additionalSources: [
+                "IKO/Resources/en.lproj/Intents.intentdefinition",
+                .glob("IKO/Resources/**/Intents.strings"),
+            ],
+            customSettings: [
+                "INTENTS_CODEGEN_LANGUAGE": "Objective-C",
+                "SWIFT_OBJC_BRIDGING_HEADER": "IKOIntentHandler/IKOIntentHandler-Bridging-Header.h",
+            ]
+        ),
+        .legacyExtension(
+            name: "IKOIntentHandlerUI",
+            bundleIdSufix: "intenthandlerui",
+            additionalSources: [
+                "IKO/Resources/en.lproj/Intents.intentdefinition",
+                .glob("IKO/Resources/**/Intents.strings"),
+            ],
+            resources: [
+                .glob(pattern: "IKOIntentHandlerUI/Resources/**"),
+            ],
+            customSettings: [
+                "SWIFT_OBJC_BRIDGING_HEADER": "IKOIntentHandler/IKOIntentHandler-Bridging-Header.h",
+                "INTENTS_CODEGEN_LANGUAGE": "Objective-C",
+            ]
+        ),
+        .framework(
+            name: "Assembly",
+            dependencies: [
+                .external(name: "SwinjectAutoregistration"),
+            ],
+            testDependencies: [
+                .target(name: "IKO"),
+            ], // workaround to run unit tests
+            dynamicFramework: true
+        ),
+        .framework(
+            name: "Assets",
+            resources: ["Assets/Resources/**"],
+            dependencies: [
+                .external(name: "DesignSystemAssets"),
+                .external(name: "Lottie"),
+            ],
+            testDependencies: [
+                .target(name: "IKO"), // workaround to run unit tests
+            ],
+            dynamicFramework: true
+        ),
+        .framework(
+            name: "LabelsDefinitions",
+            generateTestTarget: false,
+            sources: .custom("../../native-core/ios/swift/LabelsDefinitions/*.swift"),
+            dynamicFramework: true
+        ),
+        .framework(
+            name: "Labels",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "LabelsDefinitions"),
+            ],
+            dynamicFramework: true
+        ),
+        .framework(
+            name: "LabelsStub",
+            resources: [.glob(pattern: "../../native-core/assets/labels/gen/**.json")],
+            dependencies: [
+                .target(name: "LabelsDefinitions"),
+                .target(name: "Labels"),
+            ],
+            dynamicFramework: true
+        ),
+        .legacyFramework(
+            name: "AccountDetails",
+            dependencies: [
+                .target(name: "AccountHolds"),
+                .target(name: "Adverts"),
+                .target(name: "AppStateContext"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "CommonModels"),
+                .external(name: "ComposableArchitecture"),
+                .target(name: "ConfirmationCommon"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOContexts"),
+                .target(name: "IKOSettings"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "MoneyBoxesLegacy"),
+                .target(name: "MVVM"),
+                .target(name: "PartnerAbc"),
+                .target(name: "PersistentStorage"),
+                .target(name: "ProductsComponents"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "Transfers"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UserContext"),
+                .target(name: "WebView"),
+                .external(name: "Lottie"),
+            ]
+        ),
+        .framework(
+            name: "AccountHolds",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .external(name: "ComposableArchitecture"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "IdentifiedCollections"),
+            ]
+        ),
+        .framework(
+            name: "AdditionalAuthMethodList",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "Assets"),
+                .external(name: "ComposableArchitecture"),
+                .target(name: "DateUtils"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "SwiftUIUIKitWrapper"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "AdditionalVerification",
+            dependencies: [
+                .target(name: "DateUtils"),
+                .target(name: "IKOCommon"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .external(name: "SnapKit"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Adverts",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "CommonModels"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "DesignSystem"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOContexts"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "Redirects"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "WebView"),
+            ]
+        ),
+        .framework(
+            name: "AdvertsCommon",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "CommonModels"),
+                .target(name: "IKOCommon"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Agreements",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "CommonModels"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DocumentViewer"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "Restrictions"),
+                .external(name: "Swinject"),
+                .target(name: "Labels"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "WebView"),
+                .external(name: "SnapKit"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .framework(
+            name: "AppStateContext",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .legacyFramework(
+            name: "AppState",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Logger"),
+            ]
+        ),
+        .framework(
+            name: "AnalyticsService",
+            dependencies: [
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+            ],
+            testDependencies: [
+                .target(name: "IKO"),
+            ]
+        ),
+        .framework(
+            name: "AppVersionInfo",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .framework(
+            name: "Authorization",
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .target(name: "NetworkModule"),
+                .target(name: "Session"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Autosaving",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .external(name: "DesignSystemTokens"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UIPinInterface"),
+            ]
+        ),
+        .framework(
+            name: "BalanceSettings",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "AnalyticsService"),
+                .target(name: "Assembly"),
+                .target(name: "Behex"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .external(name: "DesignSystemConfigStub"),
+                .target(name: "FormComponents"),
+                .target(name: "IKOCommon"),
+                .target(name: "Labels"),
+                .target(name: "LabelsStub"),
+                .external(name: "Perception"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .target(name: "UIComponents"),
+                .target(name: "UIKitPresentationContext"),
+                .target(name: "UISwiftComponents"),
+            ],
+            demoAppDependencies: [
+                .target(name: "LabelsStub"),
+            ]
+        ),
+        .framework(
+            name: "BatchTransfers",
+            generateDemoAppTarget: false,
+            dependencies: [
+                .target(name: "CommonModels"),
+                .target(name: "ConfirmationCommon"),
+                .target(name: "IKOCommon"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .external(name: "SwinjectAutoregistration"),
+            ],
+            dynamicFramework: false,
+            strictConcurrency: false
+        ),
+        .framework(
+            name: "BehavioralBiometric",
+            generateDemoAppTarget: false,
+            dependencies: [
+                .target(name: "AnalyticsService"),
+                .target(name: "BehavioralBiometricLogger"),
+                .target(name: "Behex"),
+                .target(name: "CommonModels"),
+                .target(name: "CrashReporting"),
+                .target(name: "FormComponents"),
+                .target(name: "IKOCommon"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UIPinInterface"),
+                .target(name: "Labels"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "DesignSystemUIKit"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "Swinject"),
+            ]
+        ),
+        .framework(
+            name: "BehavioralBiometricLogger",
+            generateDemoAppTarget: false,
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "AnalyticsService"),
+                .target(name: "CrashReporting"),
+                .target(name: "IKOCommon"),
+                .target(name: "PersistentStorage"),
+                .external(name: "Swinject"),
+                .xcframework(path: .relativeToRoot("ThirdPartyModules/behavioralBiometric/PWBB_SDK.xcframework")),
+            ]
+        ),
+        .legacyFramework(
+            name: "Behex",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "IKOCommon"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .legacyFramework(
+            name: "BehexDefinitions",
+            sources: .custom("../../mob-iko-behex/ios/BehexDefinitions/BehexDefinitions/Classes/mapping/**"),
+            headers: .defaultWithAdditional("../../mob-iko-behex/ios/BehexDefinitions/BehexDefinitions/Classes/mapping/**"),
+            swiftLint: false
+        ),
+        .legacyFramework(
+            name: "Blik",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "BlocksKit"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "Restrictions"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UIPinInterface"),
+                .target(name: "UISwiftComponents"),
+                .external(name: "SnapKit"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Blik1CC",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "DateUtils"),
+                .target(name: "Restrictions"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UIPinInterface"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UserDefaultsModule"),
+            ]
+        ),
+        .legacyFramework(
+            name: "BlikComponents",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "Blik"),
+                .target(name: "BlocksKit"),
+                .target(name: "CommonModels"),
+                .target(name: "ControllerCreationItem"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOSettings"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "PersistentStorage"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UIPinInterface"),
+            ]
+        ),
+        .framework(
+            name: "BlikP2PR",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "AdvertsCommon"),
+                .target(name: "AnalyticsService"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "BlikComponents"),
+                .target(name: "CommonModels"),
+                .external(name: "ComposableArchitecture"),
+                .target(name: "Confirmation"),
+                .target(name: "DateUtils"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "FormComponents"),
+                .target(name: "IKOCommon"),
+                .target(name: "PersistentStorage"),
+                .target(name: "PinService"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UIKitPresentationContext"),
+                .target(name: "UISwiftComponents"),
+            ],
+            demoAppDependencies: [
+                .target(name: "IKOCommon"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "DesignSystemConfigStub"),
+            ]
+        ),
+        .framework(
+            name: "ESim",
+            generateDemoAppTarget: false,
+            dependencies: [
+                .target(name: "Behex"),
+                .target(name: "IKOCommon"),
+                .target(name: "UIComponents"),
+                .target(name: "UIKitPresentationContext"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "Labels"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "DesignSystemUIKit"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "SwiftUIUIKitWrapper"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Cards",
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "FormComponents"),
+                .target(name: "IKOCommon"),
+                .target(name: "ProductsComponents"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .framework(
+            name: "CardsCommon",
+            generateDemoAppTarget: false,
+            generateTestTarget: false,
+            dependencies: []
+        ),
+        .framework(
+            name: "CardsSubscriptions",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "AnalyticsService"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "CardsCommon"),
+                .external(name: "ComposableArchitecture"),
+                .target(name: "DateUtils"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .external(name: "Perception"),
+                .target(name: "PersistentStorage"),
+                .target(name: "PinService"),
+                .external(name: "SwiftUIUIKitWrapper"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UIKitPresentationContext"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "CarPlayParkings",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "DateUtils"),
+                .target(name: "IKOCommon"),
+                .target(name: "Logger"),
+                .target(name: "ParkingPlaces"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "ChangePassword",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Behex"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UIPinInterface"),
+                .external(name: "SnapKit"),
+            ]
+        ),
+        .legacyFramework(
+            name: "CodeScanner",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "CrashReporting"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "CommonModels",
+            dynamicFramework: true
+        ),
+        .legacyFramework(
+            name: "Complaints",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "WebView"),
+            ]
+        ),
+        .framework(
+            name: "Confirmation",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "AdvertsCommon"),
+                .target(name: "AnalyticsService"),
+                .target(name: "Assembly"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .external(name: "Perception"),
+                .target(name: "PinService"),
+                .external(name: "SwiftUIUIKitWrapper"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .framework(
+            name: "ConfirmationCommon",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "AdvertsCommon"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Contact",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "CommonModels"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .target(name: "LoginInterface"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UIPinInterface"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .framework(
+            name: "ContextSwitch",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "CommonModels"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .external(name: "DesignSystemSwiftUI"),
+                .target(name: "IKOContexts"),
+                .target(name: "Session"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ],
+            testDependencies: [
+                .target(name: "IKO"),
+            ]
+        ),
+        .framework(
+            name: "CrashReporting",
+            dependencies: [
+                .target(name: "Logger"),
+                .external(name: "Sentry"),
+            ],
+            testDependencies: [
+                .target(name: "IKO"),
+            ]
+        ),
+        .legacyFramework(
+            name: "DashboardComponents",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "BlocksKit"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DiscreetModeInterface"),
+                .target(name: "Events"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOContexts"),
+                .target(name: "IKOSettings"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "ParkingPlaces"),
+                .target(name: "PersistentStorage"),
+                .target(name: "ProductsComponents"),
+                .target(name: "ReorderableLayout"),
+                .target(name: "Restrictions"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "TransportTickets"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UserContext"),
+                .external(name: "SnapKit"),
+            ]
+        ),
+        .legacyFramework(
+            name: "DashboardLoggedIn",
+            dependencies: [
+                .target(name: "Adverts"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BlocksKit"),
+                .target(name: "CommonModels"),
+                .target(name: "DashboardComponents"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DiscreetModeInterface"),
+                .target(name: "Events"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOSettings"),
+                .target(name: "Restrictions"),
+                .target(name: "Logger"),
+                .external(name: "Lottie"),
+                .target(name: "MyData"),
+                .target(name: "PersistentStorage"),
+                .target(name: "ReorderableLayout"),
+                .target(name: "Session"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "Talk2IKO"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UniversalSearch"),
+                .target(name: "UserContext"),
+                .target(name: "UserDefaultsModule"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/DACircularProgress.xcframework")),
+            ],
+            customSettings: ["SWIFT_USE_INTEGRATED_DRIVER": false] // MF: workaround for problems with dependencies in Lekta. Remove after migration to SPM.
+        ),
+        .framework(
+            name: "DateUtils",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "IKOCommon"),
+                .external(name: "SwinjectAutoregistration"),
+            ],
+            testDependencies: [
+                .target(name: "IKO"),
+            ],
+            dynamicFramework: true
+        ),
+        .framework(
+            name: "DebitCardCurrencyServices",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "AnalyticsService"),
+                .target(name: "CardsCommon"),
+                .target(name: "Labels"),
+                .target(name: "PinService"),
+                .target(name: "Restrictions"),
+                .target(name: "UIKitPresentationContext"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "WebView"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "ComposableArchitecture"),
+            ],
+            demoAppDependencies: [
+                .target(name: "LabelsStub"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Deposits",
+            dependencies: [
+                .target(name: "Adverts"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "BlocksKit"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DocumentViewer"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOSettings"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "PersistentStorage"),
+                .target(name: "ProductsComponents"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UserContext"),
+                .target(name: "WebView"),
+                .target(name: "MyBankComponents"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/DACircularProgress.xcframework")),
+            ]
+        ),
+        .legacyFramework(
+            name: "DGCharts",
+            sources: .custom("../../ThirdPartyModules/charts/Source/Charts/**"),
+            headers: nil,
+            swiftLint: false
+        ),
+        .legacyFramework(
+            name: "DiscreetMode",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "CommonModels"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DiscreetModeInterface"),
+                .external(name: "Lottie"),
+                .target(name: "PersistentStorage"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .framework(
+            name: "Dispositions",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "AnalyticsService"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "BehexDefinitions"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "Restrictions"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "WebView"),
+            ]
+        ),
+        .legacyFramework(
+            name: "DocumentViewer",
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .target(name: "Logger"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .framework(
+            name: "Empty",
+            generateDemoAppTarget: true,
+            generateTestTarget: false
+        ),
+        .legacyFramework(
+            name: "Events",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "CommonModels"),
+                .target(name: "IKOCommon"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .external(name: "SnapKit"),
+            ]
+        ),
+        .legacyFramework(
+            name: "FilesUpload",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .target(name: "Restrictions"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .external(name: "SnapKit"),
+            ]
+        ),
+        .framework(
+            name: "ForeignCommon",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "ConfirmationCommon"),
+                .target(name: "IKOCommon"),
+            ]
+        ),
+        .legacyFramework(
+            name: "FormComponents",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "CommonModels"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "ForeignCommon"),
+                .target(name: "IKOCommon"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Gold",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Behex"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .target(name: "IKOCommon"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UserContext"),
+                .target(name: "WebView"),
+            ]
+        ),
+        .legacyFramework(
+            name: "GsmPayments",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "Blik"),
+                .target(name: "BlocksKit"),
+                .target(name: "ConfirmationCommon"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "Multisignature"),
+                .external(name: "Swinject"),
+                .target(name: "UIComponents"),
+                .target(name: "UserContext"),
+                .external(name: "Lottie"),
+                .external(name: "SnapKit"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Highways",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .target(name: "DocumentViewer"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "PersistentStorage"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UIPinInterface"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UserContext"),
+            ]
+        ),
+        .legacyFramework(
+            name: "IdScannerSDK",
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "SwinjectAutoregistration"),
+                .external(name: "NativeAlgorithms"),
+            ]
+        ),
+        .legacyFramework(
+            name: "IKOCommon",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "BlocksKit"),
+                .target(name: "CommonModels"),
+                .external(name: "DesignSystemTokens"),
+                .target(name: "Logger"),
+                .target(name: "NetworkModule"),
+                .target(name: "PersistentStorage"),
+                .external(name: "Swinject"),
+                .external(name: "SnapKit"),
+                .external(name: "SwinjectAutoregistration"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+            ],
+            dynamicFramework: true
+        ),
+        .legacyFramework(
+            name: "IKOContexts",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOSettings"),
+                .target(name: "MyData"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "IKOSettings",
+            dependencies: [
+                .target(name: "AppStateContext"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "ChangePassword"),
+                .target(name: "CodeScanner"),
+                .target(name: "ConfirmationCommon"),
+                .target(name: "ControllerCreationItem"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "Events"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "MobileAuth"),
+                .target(name: "MyData"),
+                .target(name: "PersistentStorage"),
+                .target(name: "Session"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Inbox",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Authorization"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "CommonModels"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOContexts"),
+                .target(name: "LoginInterface"),
+                .target(name: "NetworkModule"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Insurances",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "AnalyticsService"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BlocksKit"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .external(name: "Swinject"),
+                .target(name: "Adverts"),
+                .target(name: "DocumentViewer"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOContexts"),
+                .target(name: "Labels"),
+                .target(name: "MyBank"),
+                .target(name: "MyBankComponents"),
+                .target(name: "ProductsComponents"),
+                .target(name: "Redirects"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "WebView"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "SnapKit"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .framework(
+            name: "JuniorAffairs",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "AnalyticsService"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .external(name: "CasePaths"),
+                .external(name: "ComposableArchitecture"),
+                .target(name: "ConfirmationCommon"),
+                .target(name: "DateUtils"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "FormComponents"),
+                .target(name: "IKOCommon"),
+                .target(name: "Labels"),
+                .target(name: "LabelsStub"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "TransfersCommon"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ],
+            demoAppDependencies: [
+                .target(name: "LabelsStub"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Loans",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "BlocksKit"),
+                .target(name: "DateUtils"),
+                .target(name: "Restrictions"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DocumentViewer"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOSettings"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "ProductsComponents"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UserContext"),
+                .target(name: "WebView"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Logger",
+            dynamicFramework: true
+        ),
+        .legacyFramework(
+            name: "Login",
+            dependencies: [
+                .target(name: "AppVersionInfo"),
+                .target(name: "Assembly"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "BlocksKit"),
+                .target(name: "DashboardComponents"),
+                .target(name: "IKOCommon"),
+                .target(name: "Logger"),
+                .target(name: "NetworkModule"),
+                .target(name: "Restrictions"),
+                .target(name: "Session"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/DACircularProgress.xcframework")),
+            ]
+        ),
+        .legacyFramework(
+            name: "Meetings",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "CommonModels"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "MobileAuth",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "ConfirmationCommon"),
+                .external(name: "DesignSystemTokens"),
+                .target(name: "IKOCommon"),
+                .target(name: "PersistentStorage"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UIPinInterface"),
+            ]
+        ),
+        .legacyFramework(
+            name: "MoneyBoxesLegacy",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .target(name: "IKOCommon"),
+                .target(name: "MyBankComponents"),
+                .target(name: "ProductsComponents"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "Transfers"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "MoreMenu",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Authorization"),
+                .target(name: "Behex"),
+                .target(name: "CommonModels"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOContexts"),
+                .target(name: "IKOSettings"),
+                .target(name: "Logger"),
+                .target(name: "Session"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "WebView"),
+                .external(name: "SnapKit"),
+            ]
+        ),
+        .legacyFramework(
+            name: "MoreMenuComponents",
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Multisignature",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "IKOCommon"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "MyBank",
+            dependencies: [
+                .target(name: "Adverts"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Autosaving"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "BlocksKit"),
+                .target(name: "DashboardComponents"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DGCharts"),
+                .target(name: "DocumentViewer"),
+                .target(name: "FormComponents"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOContexts"),
+                .target(name: "IKOSettings"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "MoneyBoxesLegacy"),
+                .target(name: "NetworkModule"),
+                .target(name: "PersistentStorage"),
+                .target(name: "MyBankComponents"),
+                .target(name: "ProductsComponents"),
+                .target(name: "Redirects"),
+                .target(name: "RegistrationContext"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UserContext"),
+                .target(name: "WebView"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/DACircularProgress.xcframework")),
+            ],
+            customSettings: ["SWIFT_USE_INTEGRATED_DRIVER": false]
+        ),
+        .framework(
+            name: "MyBankComponents",
+            generateDemoAppTarget: false,
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "UIComponents"),
+                .external(name: "DesignSystemSwiftUI"),
+            ]
+        ),
+        .legacyFramework(
+            name: "MyData",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "BehavioralBiometric"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UserContext"),
+                .target(name: "WebView"),
+            ]
+        ),
+        .legacyFramework(
+            name: "NetworkModule",
+            dependencies: [
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .target(name: "Logger"),
+                .target(name: "PersistentStorage"),
+            ],
+            dynamicFramework: true
+        ),
+        .legacyFramework(
+            name: "Offers",
+            dependencies: [
+                .target(name: "Adverts"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "CommonModels"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOContexts"),
+                .external(name: "Lottie"),
+                .target(name: "MyData"),
+                .target(name: "PersistentStorage"),
+                .target(name: "Redirects"),
+                .external(name: "SwiftUIUIKitWrapper"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .framework(
+            name: "OfflineMode",
+            generateDemoAppTarget: true,
+            generateTestTarget: true,
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "DesignSystemUIKit"),
+            ]
+        ),
+        .legacyFramework(
+            name: "ParkingPlaces",
+            dependencies: [
+                .target(name: "Adverts"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Authorization"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "BlocksKit"),
+                .target(name: "ConfirmationCommon"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "Events"),
+                .target(name: "IKOCommon"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "Multisignature"),
+                .target(name: "Restrictions"),
+                .target(name: "PersistentStorage"),
+                .target(name: "Session"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "TransportServices"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .external(name: "Lottie"),
+            ]
+        ),
+        .framework(
+            name: "PartnerAbc",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "AnalyticsService"),
+                .target(name: "Assets"),
+                .target(name: "Labels"),
+                .target(name: "LabelsStub"),
+                .target(name: "PinService"),
+                .target(name: "ProductsComponents"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .target(name: "UIKitPresentationContext"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "WebView"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "DesignSystemSwiftUI"),
+            ],
+            demoAppDependencies: [
+                .target(name: "LabelsStub"),
+            ]
+        ),
+        .legacyFramework(
+            name: "PersistentStorage",
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+            ],
+            dynamicFramework: true
+        ),
+        .framework(
+            name: "PinService",
+            dependencies: [
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+            ],
+            testDependencies: [
+                .target(name: "IKO"),
+            ]
+        ),
+        .legacyFramework(
+            name: "PkoIdVerification",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "CommonModels"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .target(name: "Logger"),
+                .external(name: "Lottie"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "WebView"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Places",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "CommonModels"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "Restrictions"),
+                .target(name: "IKOCommon"),
+                .target(name: "Logger"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .framework(
+            name: "Preonboarding",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "AnalyticsService"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "CommonModels"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "Dependencies"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "PreloginDashboard",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Authorization"),
+                .target(name: "Behex"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "GreetingManager"),
+                .target(name: "IKOCommon"),
+                .external(name: "Lottie"),
+                .target(name: "PersistentStorage"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UIPinInterface"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UserContext"),
+                .target(name: "UserDefaultsModule"),
+            ]
+        ),
+        .legacyFramework(
+            name: "ProductsComponents",
+            dependencies: [
+                .target(name: "AdvertsCommon"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "BlocksKit"),
+                .target(name: "CommonModels"),
+                .target(name: "ConfirmationCommon"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/DACircularProgress.xcframework")),
+                .target(name: "DateUtils"),
+                .target(name: "Restrictions"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DiscreetModeInterface"),
+                .target(name: "IKOCommon"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "PersistentStorage"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "WebView"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Recipients",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "CommonModels"),
+                .target(name: "ConfirmationCommon"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "ForeignCommon"),
+                .target(name: "FormComponents"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "Restrictions"),
+                .target(name: "ScreenInfoProvider"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .framework(
+            name: "Redirects",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "CommonModels"),
+                .target(name: "CrashReporting"),
+                .target(name: "IKOCommon"),
+                .target(name: "Restrictions"),
+                .target(name: "Logger"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+            ],
+            testDependencies: [
+                .target(name: "EmptyDemoApp"),
+            ]
+        ),
+        .framework(
+            name: "RegistrationContext",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .framework(
+            name: "ScreenInfoProvider",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .framework(
+            name: "Session",
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "CombineSchedulers"),
+                .target(name: "CommonModels"),
+                .target(name: "DateUtils"),
+                .target(name: "NetworkModule"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UserActivityMonitor"),
+            ],
+            testDependencies: [
+                .target(name: "EmptyDemoApp"),
+            ],
+            dynamicFramework: true,
+            strictConcurrency: false
+        ),
+        .framework(
+            name: "SessionTestingHelpers",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "Session"),
+            ]
+        ),
+        .framework(
+            name: "StandingOrders",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "AnalyticsService"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .external(name: "ComposableArchitecture"),
+                .target(name: "ConfirmationCommon"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "FormComponents"),
+                .target(name: "IKOCommon"),
+                .target(name: "Restrictions"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "SubmittedDispositions",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Behex"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DocumentViewer"),
+                .target(name: "Restrictions"),
+                .target(name: "IKOCommon"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "WebView"),
+            ]
+        ),
+        .legacyFramework(
+            name: "Talk2IKO",
+            dependencies: [
+                .target(name: "AccountDetails"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "Blik"),
+                .target(name: "CrashReporting"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DGCharts"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOContexts"),
+                .external(name: "InputBarAccessoryView"),
+                .external(name: "Lottie"),
+                .target(name: "PersistentStorage"),
+                .target(name: "ProductsComponents"),
+                .target(name: "Redirects"),
+                .target(name: "Session"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "Transfers"),
+                .target(name: "TransfersCommon"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UserContext"),
+            ],
+            customSettings: ["SWIFT_USE_INTEGRATED_DRIVER": false]
+        ),
+        .legacyFramework(
+            name: "Transfers",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "CommonModels"),
+                .target(name: "ConfirmationCommon"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "ForeignCommon"),
+                .target(name: "FormComponents"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOContexts"),
+                .target(name: "PersistentStorage"),
+                .target(name: "Recipients"),
+                .target(name: "Restrictions"),
+                .target(name: "ScreenInfoProvider"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "TransfersCommon"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .framework(
+            name: "TransfersCommon",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "ConfirmationCommon"),
+            ]
+        ),
+        .framework(
+            name: "TransactionsToApprove",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "ComposableArchitecture"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemConfigStub"),
+                .target(name: "IKOCommon"),
+                .external(name: "Perception"),
+                .external(name: "SnapKit"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UncompletedTransfersService"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .legacyFramework(
+            name: "TransportServices",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "BlocksKit"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "PersistentStorage"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+            ]
+        ),
+        .legacyFramework(
+            name: "TransportTickets",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "BlocksKit"),
+                .target(name: "CodeScanner"),
+                .target(name: "ConfirmationCommon"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DiscreetModeInterface"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "Restrictions"),
+                .target(name: "IKOCommon"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "Multisignature"),
+                .target(name: "PersistentStorage"),
+                .target(name: "Session"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "TransportServices"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UserContext"),
+                .external(name: "Lottie"),
+            ]
+        ),
+        .framework(
+            name: "UserActivityMonitor",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+            ],
+            dynamicFramework: true
+        ),
+        .legacyFramework(
+            name: "UIComponents",
+            dependencies: [
+                .target(name: "AppStateContext"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .target(name: "BlocksKit"),
+                .target(name: "CommonModels"),
+                .target(name: "ControllerCreationItem"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DiscreetModeInterface"),
+                .target(name: "Environment"),
+                .target(name: "Events"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "Logger"),
+                .external(name: "Lottie"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "MVVM"),
+                .target(name: "NetworkModule"),
+                .target(name: "PersistentStorage"),
+                .target(name: "ReorderableLayout"),
+                .target(name: "Restrictions"),
+                .target(name: "Session"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIPinInterface"),
+                .target(name: "UserActivityMonitor"),
+                .target(name: "UserContext"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/DACircularProgress.xcframework")),
+            ]
+        ),
+        .framework(
+            name: "UIKitPresentationContext",
+            dependencies: [
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+            ],
+            testDependencies: [
+                .target(name: "IKO"),
+            ]
+        ),
+        .legacyFramework(
+            name: "UISwiftComponents",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "FoundationExtensions"),
+                .target(name: "IKOCommon"),
+                .target(name: "Logger"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+            ]
+        ),
+        .framework(
+            name: "UniversalLink",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "CommonModels"),
+                .target(name: "IKOCommon"),
+                .target(name: "Redirects"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+            ],
+            testDependencies: [
+                .target(name: "EmptyDemoApp"),
+            ]
+        ),
+        .framework(
+            name: "UncompletedTransfers",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .external(name: "ComposableArchitecture"),
+                .target(name: "DateUtils"),
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "DesignSystemTokens"),
+                .target(name: "IKOCommon"),
+                .target(name: "PinService"),
+                .external(name: "SnapKit"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+                .target(name: "UncompletedTransfersService"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .framework(
+            name: "UncompletedTransfersService",
+            generateDemoAppTarget: false,
+            generateTestTarget: false,
+            dependencies: [
+                .external(name: "Dependencies"),
+                .external(name: "DependenciesMacros"),
+                .target(name: "PinService"),
+                .external(name: "ComposableArchitecture"),
+            ]
+        ),
+        .framework(
+            name: "UserContext",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Session"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+            ],
+            testDependencies: [
+                .target(name: "SessionTestingHelpers"),
+                .target(name: "UserContextTestingHelpers"),
+            ],
+            dynamicFramework: true
+        ),
+        .framework(
+            name: "UserContextTestingHelpers",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "UserContext"),
+            ]
+        ),
+        .legacyFramework(
+            name: "UniversalSearch",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .target(name: "IKOContexts"),
+                .target(name: "MyBank"),
+                .target(name: "ProductsComponents"),
+                .external(name: "SnapKit"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UserContext"),
+            ],
+            customSettings: ["SWIFT_USE_INTEGRATED_DRIVER": false]
+        ),
+        .framework(
+            name: "VasCoin",
+            generateDemoAppTarget: true,
+            dependencies: [
+                .target(name: "AnalyticsService"),
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BehexDefinitions"),
+                .external(name: "ComposableArchitecture"),
+                .target(name: "DateUtils"),
+                .external(name: "Dependencies"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemConfigStub"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "IKOCommon"),
+                .external(name: "Perception"),
+                .target(name: "ProductsComponents"),
+                .target(name: "Restrictions"),
+                .external(name: "SwiftUIUIKitWrapper"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+                .target(name: "UISwiftComponents"),
+            ]
+        ),
+        .framework(
+            name: "ExchangeRates",
+            generateDemoAppTarget: false,
+            dependencies: [
+                .target(name: "BehexDefinitions"),
+                .target(name: "AnalyticsService"),
+                .target(name: "Assets"),
+                .target(name: "DateUtils"),
+                .target(name: "UISwiftComponents"),
+                .external(name: "DesignSystemSwiftUI"),
+                .external(name: "ComposableArchitecture"),
+            ]
+        ),
+        .framework(
+            name: "UserDefaultsModule",
+            generateDemoAppTarget: false,
+            generateTestTarget: false,
+            dependencies: []
+        ),
+        .framework(
+            name: "FoundationExtensions",
+            generateDemoAppTarget: false,
+            dependencies: []
+        ),
+        .legacyFramework(
+            name: "WebView",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "Assets"),
+                .target(name: "Behex"),
+                .target(name: "BlocksKit"),
+                .target(name: "CommonModels"),
+                .target(name: "CrashReporting"),
+                .target(name: "DateUtils"),
+                .external(name: "DesignSystemAssets"),
+                .external(name: "DesignSystemTokens"),
+                .external(name: "DesignSystemUIKit"),
+                .target(name: "DocumentViewer"),
+                .target(name: "Environment"),
+                .target(name: "FilesUpload"),
+                .target(name: "IKOCommon"),
+                .target(name: "Logger"),
+                .xcframework(path: .relativeToRoot("LegacyFrameworks/Masonry.xcframework")),
+                .target(name: "Reachability"),
+                .external(name: "Swinject"),
+                .external(name: "SwinjectAutoregistration"),
+                .target(name: "UIComponents"),
+            ]
+        ),
+        .framework(
+            name: "ExternalBrowserMapProvider"
+        ),
+        .legacyFramework(name: "MVVM"),
+        .framework(
+            name: "LoginInterface",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "CommonModels"),
+                .target(name: "IKOCommon"),
+                .target(name: "NetworkModule"),
+                .target(name: "UIPinInterface"),
+            ]
+        ),
+        .framework(
+            name: "UIPinInterface",
+            generateTestTarget: false
+        ),
+        .legacyFramework(
+            name: "BlocksKit",
+            dynamicFramework: true
+        ),
+        .framework(
+            name: "DiscreetModeInterface",
+            generateTestTarget: false
+        ),
+        .framework(
+            name: "GreetingManager",
+            dependencies: [
+                .target(name: "DateUtils"),
+                .target(name: "IKOCommon"),
+                .target(name: "PersistentStorage"),
+            ]
+        ),
+        .legacyFramework(
+            name: "ReorderableLayout",
+            dependencies: [
+                .target(name: "Assembly"),
+                .target(name: "BlocksKit"),
+                .target(name: "IKOCommon"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .framework(
+            name: "Reachability"
+        ),
+        .framework(
+            name: "Environment",
+            generateTestTarget: false,
+            dependencies: [
+                .target(name: "Assembly"),
+                .external(name: "SwinjectAutoregistration"),
+            ]
+        ),
+        .legacyFramework(name: "ControllerCreationItem"),
+        .legacyFramework(
+            name: "Restrictions",
+            dependencies: [
+                .target(name: "IKOCommon"),
+            ]
+        ),
+    ]
+)
