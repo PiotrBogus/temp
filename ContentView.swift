@@ -5,7 +5,6 @@ import GenieCommonDomain
 private let defaultMaxSelectableOptions = 20
 
 public struct ChartOutputMapperLive: ChartOutputMapper {
-
     private let leftAxisFormater: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
@@ -19,54 +18,117 @@ public struct ChartOutputMapperLive: ChartOutputMapper {
         usign dateFormats: [DataFormatEntity]
     ) -> ChartDataAggregate {
 
-        let formatterConfig = createDataFormats(from: dateFormats)
+        let configDataFormats = createDataFormats(from: dateFormats)
 
-        // 🔴 JEDNO ŹRÓDŁO KOLORÓW
+        // ⭐️ COLOR SYNC CHANGE – jeden wspólny rotator
         var colorRotator = ChartColorRotator(includeNovartisBlue: true)
-
-        // 🔴 DrawableItem tworzony RAZ
-        let drawableItemsById: [Int: DrawableItem] =
-            Dictionary(uniqueKeysWithValues: data.dataSets.map {
-                ($0.id, mapChartDataSetToDrawableItem($0, &colorRotator))
-            })
 
         let legends = map(
             legends: data.legends,
-            drawableItemsById: drawableItemsById
+            dataSets: data.dataSets,
+            colorRotator: &colorRotator
         )
 
         let chartData = map(
             dataSets: data.dataSets,
             dataPoints: data.dataPoints,
-            drawableItemsById: drawableItemsById,
-            formatterConfig: formatterConfig
+            with: configDataFormats,
+            colorRotator: &colorRotator
         )
 
         let selectors = map(selectors: data.selectors)
         let dimensions = map(dimensions: data.dimensionSelectors)
 
         return ChartDataAggregate(
-            dataFormats: formatterConfig,
+            dataFormats: configDataFormats,
             legends: legends,
             data: chartData,
             selectors: selectors,
             dimensions: dimensions
         )
     }
-}
 
-// MARK: - Chart Data
+    private func createDataFormats(from dateFormats: [DataFormatEntity]) -> ChartFormatterConfig {
+        ChartFormatterConfig(
+            axisFormatter: leftAxisFormater,
+            dataFormats: dateFormats
+        )
+    }
 
-private extension ChartOutputMapperLive {
+    // MARK: - Selectors
 
-    func map(
+    private func map(apiSelectors dto: [Components.Schemas.Selector]?) -> [FilterWithOptions] {
+        guard let dto else { return [] }
+
+        return dto.compactMap { selector in
+            let id = extractId(selector.id)
+            let name = selector.name
+            let title = selector.title ?? selector.name
+            let type = mapSelectorTypeToFilterType(selector._type)
+
+            let options = selector.options.compactMap { option in
+                let optionId = extractId(option.id)
+                return GenieCommonDomain.Dimension.Option(
+                    id: optionId,
+                    title: option.title,
+                    isEnabled: option.isEnabled ?? true,
+                    isDefault: isOptionDefault(
+                        optionId: optionId,
+                        defaultValue: selector.defaultValue
+                    )
+                )
+            }
+
+            guard !options.isEmpty else { return nil }
+
+            let selectedOptions = prepareSelectedOptions(
+                from: options,
+                defaultValue: selector.defaultValue
+            )
+
+            return GenieCommonDomain.Dimension(
+                id: id,
+                name: name,
+                title: title,
+                type: type,
+                selectedOptions: selectedOptions,
+                options: options,
+                maxSelectableOptions: selector.maxMultiselectValues
+                    ?? defaultMaxSelectableOptions,
+                allowsMultiselect: selector.allowMultiselect ?? false
+            )
+        }
+    }
+
+    private func map(dimensions dto: [Components.Schemas.Selector]?) -> [FilterWithOptions] {
+        map(apiSelectors: dto)
+    }
+
+    private func map(selectors dto: [Components.Schemas.Selector]?) -> [FilterWithOptions] {
+        guard let dto else { return [] }
+        return map(apiSelectors: dto.filter { $0.name != "page_id" })
+    }
+
+    // MARK: - Chart data
+
+    private func map(
         dataSets: [Components.Schemas.ChartDataSet],
         dataPoints: [Components.Schemas.ChartDataPoint],
-        drawableItemsById: [Int: DrawableItem],
-        formatterConfig: ChartFormatterConfig
+        with formatterConfig: ChartFormatterConfig,
+        colorRotator: inout ChartColorRotator // ⭐️ COLOR SYNC CHANGE
     ) -> [ChartDataWithVisibility<ChartData>] {
 
-        dataPoints.enumerated().compactMap { index, point in
+        var drawableItemsById: [Int: DrawableItem] = [:]
+
+        for dataSet in dataSets {
+            let drawableItem = mapChartDataSetToDrawableItem(
+                dataSet,
+                &colorRotator
+            )
+            drawableItemsById[dataSet.id] = drawableItem
+        }
+
+        return dataPoints.enumerated().compactMap { index, point in
             guard
                 let dataSet = dataSets.first(where: { $0.id == point.dataSetId }),
                 let drawableItem = drawableItemsById[dataSet.id]
@@ -86,39 +148,43 @@ private extension ChartOutputMapperLive {
             )
         }
     }
-}
 
-// MARK: - Legends
+    // MARK: - Legends
 
-private extension ChartOutputMapperLive {
-
-    func map(
+    private func map(
         legends dto: [[Components.Schemas.ChartLegend]]?,
-        drawableItemsById: [Int: DrawableItem]
+        dataSets: [Components.Schemas.ChartDataSet],
+        colorRotator: inout ChartColorRotator // ⭐️ COLOR SYNC CHANGE
     ) -> [LegendItem] {
 
         guard let dto else { return [] }
 
-        return dto.flatMap { group in
-            group.compactMap { legend in
-                let associatedIds =
-                    legend.associatedDataSetIds?.compactMap { Int($0) } ?? []
+        return dto.flatMap { legendGroup in
+            legendGroup.compactMap { legend in
+                let id = legend.title.hashValue
+                let title = legend.title
 
-                let drawableItem =
-                    associatedIds.compactMap { drawableItemsById[$0] }.first
+                let color = extractColorFromSemanticColor(
+                    legend.color,
+                    with: &colorRotator
+                ) ?? "#000000"
+
+                let associatedDrawableIds =
+                    legend.associatedDataSetIds?.compactMap(Int.init) ?? []
+
+                let dataType = determineDataTypeFromAssociatedDataSets(
+                    associatedDataSetIds: associatedDrawableIds,
+                    dataSets: dataSets,
+                    colorRotator: &colorRotator
+                )
 
                 return LegendItem(
-                    id: legend.title.hashValue,
-                    title: legend.title,
-                    color: drawableItem?.colorHex ?? "#000000",
+                    id: id,
+                    title: title,
+                    color: color,
                     markType: mapDataPointDecorationToMarkType(legend.lineDecoration),
-                    associatedDrawableIds: associatedIds,
-                    dataType: drawableItem.map { drawable in
-                        switch drawable.markType {
-                        case .circle, .square, .diamond:
-                            return .projectedLine(drawable)
-                        }
-                    },
+                    associatedDrawableIds: associatedDrawableIds,
+                    dataType: dataType,
                     visibility: mapVisibilityToChartVisibility(legend.visibility)
                 )
             }
@@ -126,76 +192,55 @@ private extension ChartOutputMapperLive {
     }
 }
 
-// MARK: - DrawableItem
+// MARK: - Helpers (BEZ ZMIAN)
 
 private extension ChartOutputMapperLive {
 
-    func mapChartDataSetToDrawableItem(
-        _ dataSet: Components.Schemas.ChartDataSet,
-        _ colorRotator: inout ChartColorRotator
-    ) -> DrawableItem {
-
-        DrawableItem(
-            id: dataSet.id,
-            name: "DataSet \(dataSet.id)",
-            isDashed: dataSet.lineStyle == .dashed,
-            colorHex: extractColorFromSemanticColor(dataSet.color, with: &colorRotator) ?? "#000000",
-            opacity: 1.0,
-            markType: mapDataPointDecorationToMarkType(dataSet.lineDecoration),
-            visibility: mapVisibilityToChartVisibility(dataSet.visibility)
-        )
-    }
-}
-
-// MARK: - Helpers (bez zmian logicznych)
-
-private extension ChartOutputMapperLive {
-
-    func createDataFormats(from dateFormats: [DataFormatEntity]) -> ChartFormatterConfig {
-        ChartFormatterConfig(
-            axisFormatter: leftAxisFormater,
-            dataFormats: dateFormats
-        )
-    }
-
-    func extractColorFromSemanticColor(
-        _ color: Components.Schemas.SemanticColor?,
-        with colorRotator: inout ChartColorRotator
-    ) -> String? {
-        color?.hexValue ?? colorRotator.nextColor()
-    }
-
-    func mapDataPointDecorationToMarkType(
-        _ decoration: Components.Schemas.DataPointDecoration?
-    ) -> MarkType {
-        switch decoration {
-        case .circle: return .circle
-        case .square: return .square
-        case .diamond: return .diamond
-        default: return .circle
+    func extractId(_ id: Components.Schemas.GeneralId) -> String {
+        switch id {
+        case .integer(let intValue): return "\(intValue)"
+        case .string(let stringValue): return stringValue
         }
     }
 
-    func mapVisibilityToChartVisibility(
-        _ visibility: Components.Schemas.ChartDataSetVisibility?
-    ) -> ChartVisibility? {
-        guard let visibility else { return nil }
+    func mapSelectorTypeToFilterType(
+        _ type: Components.Schemas.SelectorType?
+    ) -> GenieCommonDomain.Dimension.FilterType {
+        type?.rawValue == "segmented" ? .segmented : .list
+    }
 
-        let handling: ChartVisibility.Handling =
-            visibility.handling == .oneOf ? .oneOf :
-            visibility.handling == .allOf ? .allOf : .none
+    func isOptionDefault(
+        optionId: String,
+        defaultValue: DefaultValueType?
+    ) -> Bool {
+        guard let defaultValue else { return false }
 
-        let associations =
-            visibility.dimensionAssociations?.map {
-                ChartVisibility.DimensionAssociation(
-                    dimensionId: "\($0.dimensionId)",
-                    value: "\($0.value)"
-                )
-            } ?? []
+        let values: [String]
+        switch defaultValue {
+        case .integer(let v): values = ["\(v)"]
+        case .string(let v): values = [v]
+        case .integerArray(let v): values = v.map(String.init)
+        case .stringArray(let v): values = v
+        }
 
-        return ChartVisibility(
-            handling: handling,
-            dimensionAssociations: associations
-        )
+        return values.contains(optionId)
+    }
+
+    func prepareSelectedOptions(
+        from options: [GenieCommonDomain.Dimension.Option],
+        defaultValue: DefaultValueType?
+    ) -> [GenieCommonDomain.Dimension.Option] {
+
+        guard let defaultValue else { return [] }
+
+        let values: [String]
+        switch defaultValue {
+        case .integer(let v): values = ["\(v)"]
+        case .string(let v): values = [v]
+        case .integerArray(let v): values = v.map(String.init)
+        case .stringArray(let v): values = v
+        }
+
+        return options.filter { values.contains($0.id) }
     }
 }
