@@ -1,11 +1,13 @@
 @testable import BehavioralBiometric
 import Behex
 import ComposableArchitecture
-import XCTest
+import Testing
 
 @MainActor
-final class BehavioralBiometricExplanationReducerTests: XCTestCase {
-    func test_turnOnAdditionalSecurityButtonTap_navigatesToAgreements() async {
+struct BehavioralBiometricExplanationReducerTests {
+
+    @Test
+    func turnOnAdditionalSecurityButtonTap_navigatesToAgreements() async {
         let store = makeStore()
 
         await store.send(.onTurnOnAdditionalSecurityButtonTap) {
@@ -13,7 +15,8 @@ final class BehavioralBiometricExplanationReducerTests: XCTestCase {
         }
     }
 
-    func test_showAllQuestionsAndAnswersButtonTap_navigatesToFAQ() async {
+    @Test
+    func showAllQuestionsAndAnswersButtonTap_navigatesToFAQ() async {
         let store = makeStore()
 
         await store.send(.onShowAllQuestionsAndAnswersButtonTap) {
@@ -21,7 +24,8 @@ final class BehavioralBiometricExplanationReducerTests: XCTestCase {
         }
     }
 
-    func test_onQuestionTap_setsExpandedId() async {
+    @Test
+    func onQuestionTap_setsExpandedId() async {
         let store = makeStore()
         let id = UUID()
 
@@ -30,7 +34,8 @@ final class BehavioralBiometricExplanationReducerTests: XCTestCase {
         }
     }
 
-    func test_onQuestionTap_withNil_clearsExpandedId() async {
+    @Test
+    func onQuestionTap_withNil_clearsExpandedId() async {
         let store = makeStore(expandedId: UUID())
 
         await store.send(.onQuestionTap(nil)) {
@@ -54,7 +59,9 @@ final class BehavioralBiometricExplanationReducerTests: XCTestCase {
                 expandedId: expandedId
             )
         ) {
-            BehavioralBiometricExplanationReducer(behex: BehavioralBiometricBehexMock())
+            BehavioralBiometricExplanationReducer(
+                behex: BehavioralBiometricBehexMock()
+            )
         }
     }
 }
