@@ -1,38 +1,64 @@
-@preconcurrency import Behex
+import XCTest
 import ComposableArchitecture
-import Foundation
+@testable import YourModuleName
 
-@Reducer
-struct BehavioralBiometricFAQReducer: Sendable {
-    @ObservableState
-    struct State: Equatable, Sendable {
-        let questionsAndAnswersItems: [BehavioralBiometricQuestionAndAnswerItem] = BehavioralBiometricQuestionAndAnswerItem.faq
+final class BehavioralBiometricFAQReducerTests: XCTestCase {
 
-        var expandedId: UUID?
+    // MARK: - Behex Mock
+
+    private final class BehexMock: Behex {
+        private(set) var registeredEvents: [Any] = []
+
+        func register(event: Any) {
+            registeredEvents.append(event)
+        }
     }
 
-    enum Action: Sendable {
-        case onQuestionTap(UUID?)
-        case onAppear
+    // MARK: - Helpers
+
+    private func makeStore(
+        behex: BehexMock = BehexMock()
+    ) -> TestStore<
+        BehavioralBiometricFAQReducer.State,
+        BehavioralBiometricFAQReducer.Action
+    > {
+        TestStore(
+            initialState: BehavioralBiometricFAQReducer.State(
+                expandedId: nil
+            )
+        ) {
+            BehavioralBiometricFAQReducer(behex: behex)
+        }
     }
 
-    private let behex: Behex
+    // MARK: - Tests
 
-    init(behex: Behex) {
-        self.behex = behex
+    func test_onAppear_registersBehexEvent_andDoesNotChangeState() async {
+        let behex = BehexMock()
+        let store = makeStore(behex: behex)
+
+        let initialState = store.state
+
+        await store.send(.onAppear)
+
+        XCTAssertEqual(behex.registeredEvents.count, 1)
+        XCTAssertEqual(store.state, initialState)
     }
 
-    var body: some Reducer<State, Action> {
-        Reduce { state, action in
-            switch action {
-            case .onAppear:
-                behex.register(event: .BehavioralBiometric_AllQuestionsScreen_view_Show)
-                return .none
+    func test_onQuestionTap_setsExpandedId() async {
+        let store = makeStore()
+        let id = UUID()
 
-            case .onQuestionTap(let id):
-                state.expandedId = id
-                return .none
-            }
+        await store.send(.onQuestionTap(id)) {
+            $0.expandedId = id
+        }
+    }
+
+    func test_onQuestionTap_withNil_clearsExpandedId() async {
+        let store = makeStore()
+
+        await store.send(.onQuestionTap(nil)) {
+            $0.expandedId = nil
         }
     }
 }
