@@ -1,11 +1,13 @@
 @testable import BehavioralBiometric
 import Behex
 import ComposableArchitecture
-import XCTest
+import Testing
 
-@MainActor
-final class BehavioralBiometricStatusReducerTests: XCTestCase {
-    func test_onAppear_loadsStatusSuccessfully() async {
+struct BehavioralBiometricStatusReducerTests {
+
+    @Test
+    @MainActor
+    func onAppear_loadsStatusSuccessfully() async {
         let state = BehavioralBiometricState(
             enabled: true,
             agreementsDate: "14.04.2015",
@@ -27,9 +29,11 @@ final class BehavioralBiometricStatusReducerTests: XCTestCase {
         }
     }
 
-    func test_onPrimaryButtonTap_whenEnabled_opensDisableFlow_andLogsEvent() async {
+    @Test
+    @MainActor
+    func onPrimaryButtonTap_whenEnabled_opensDisableFlow() async {
         let store = makeStore(
-            state: .init(isBehavioralBiometricEnabled: true),
+            state: .init(isBehavioralBiometricEnabled: true)
         )
 
         await store.send(.onPrimaryButtonTap) {
@@ -37,9 +41,11 @@ final class BehavioralBiometricStatusReducerTests: XCTestCase {
         }
     }
 
-    func test_onPrimaryButtonTap_whenDisabled_opensEnableFlow_andLogsEvent() async {
+    @Test
+    @MainActor
+    func onPrimaryButtonTap_whenDisabled_opensEnableFlow() async {
         let store = makeStore(
-            state: .init(isBehavioralBiometricEnabled: false),
+            state: .init(isBehavioralBiometricEnabled: false)
         )
 
         await store.send(.onPrimaryButtonTap) {
@@ -47,7 +53,9 @@ final class BehavioralBiometricStatusReducerTests: XCTestCase {
         }
     }
 
-    func test_onDisableBehavioralBiometric_opensMPinBottomSheet() async {
+    @Test
+    @MainActor
+    func onDisableBehavioralBiometric_opensMPinBottomSheet() async {
         let store = makeStore()
 
         await store.send(.onDisableBehavioralBiometric) {
@@ -55,7 +63,9 @@ final class BehavioralBiometricStatusReducerTests: XCTestCase {
         }
     }
 
-    func test_onReceiveMPin_successfullyDisablesBiometric() async {
+    @Test
+    @MainActor
+    func onReceiveMPin_successfullyDisablesBiometric() async {
         let state = BehavioralBiometricState(
             enabled: false,
             agreementsDate: "14.04.2015",
@@ -82,7 +92,9 @@ final class BehavioralBiometricStatusReducerTests: XCTestCase {
         }
     }
 
-    func test_onError_setsErrorDestination() async {
+    @Test
+    @MainActor
+    func onError_setsErrorDestination() async {
         let network = BehavioralBiometricNetworkServiceProviderMock()
         let error = BehavioralBiometricError.unknown
         network.getBehavioralBiometricStateResult = .failure(error)
@@ -98,11 +110,11 @@ final class BehavioralBiometricStatusReducerTests: XCTestCase {
         }
     }
 
-    func test_onResetDestination_clearsDestination() async {
-        let network = BehavioralBiometricNetworkServiceProviderMock()
+    @Test
+    @MainActor
+    func onResetDestination_clearsDestination() async {
         let store = makeStore(
-            state: .init(destination: .explanation),
-            network: network
+            state: .init(destination: .explanation)
         )
 
         await store.send(.onResetDestination) {
@@ -112,6 +124,7 @@ final class BehavioralBiometricStatusReducerTests: XCTestCase {
 
     // MARK: - Helpers
 
+    @MainActor
     private func makeStore(
         state: BehavioralBiometricStatusReducer.State = .init(),
         network: BehavioralBiometricNetworkServiceProviderMock = .init(),
