@@ -1,11 +1,13 @@
 @testable import BehavioralBiometric
 import Behex
 import ComposableArchitecture
-import XCTest
+import Testing
 
 @MainActor
-final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
-    func test_onAppear_loadsAgreementsSuccessfully() async {
+struct BehavioralBiometricAgreementsReducerTests {
+
+    @Test
+    func onAppear_loadsAgreementsSuccessfully() async {
         let agreements = [makeAgreement(id: "1", textConsentId: "1", mandatory: true)]
         let network = BehavioralBiometricNetworkServiceProviderMock()
         network.getAgreementsResult = .success(agreements)
@@ -31,13 +33,12 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    func test_primaryButtonTap_withMissingMandatoryAgreements_setsUnselectedIds() async {
+    @Test
+    func primaryButtonTap_withMissingMandatoryAgreements_setsUnselectedIds() async {
         let agreements = [
             makeAgreement(id: "A", textConsentId: "A", mandatory: true),
             makeAgreement(id: "B", textConsentId: "B", mandatory: false),
         ]
-        let network = BehavioralBiometricNetworkServiceProviderMock()
-        network.getAgreementsResult = .success(agreements)
 
         let store = TestStore(
             initialState: BehavioralBiometricAgreementsReducer.State(
@@ -60,7 +61,8 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    func test_primaryButtonTap_allMandatorySelected_opensMPinBottomSheet() async {
+    @Test
+    func primaryButtonTap_allMandatorySelected_opensMPinBottomSheet() async {
         let agreements = [
             makeAgreement(id: "A", textConsentId: "A", mandatory: true),
         ]
@@ -87,7 +89,8 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
         }
     }
 
-    func test_onReceiveMPin_enablesBehavioralBiometricSuccessfully() async {
+    @Test
+    func onReceiveMPin_enablesBehavioralBiometricSuccessfully() async {
         let network = BehavioralBiometricNetworkServiceProviderMock()
         network.getAgreementsResult = .success([])
 
@@ -120,13 +123,14 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
             $0.destination = .enabledBehavioralBiometricSuccess
         }
 
-        XCTAssertTrue(statusStorage.isEnabled)
-        XCTAssertTrue(dashboardRefresher.didRefresh)
+        #expect(statusStorage.isEnabled == true)
+        #expect(dashboardRefresher.didRefresh == true)
     }
 
-    func test_onError_setsDestinationError() async {
+    @Test
+    func onError_setsDestinationError() async {
         let network = BehavioralBiometricNetworkServiceProviderMock()
-        network.getAgreementsResult = .failure(BehavioralBiometricError.timeout)
+        network.getAgreementsResult = .failure(.timeout)
 
         let store = TestStore(
             initialState: BehavioralBiometricAgreementsReducer.State()
@@ -143,7 +147,7 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
             $0.isLoading = true
         }
 
-        await store.receive(\.onError, BehavioralBiometricError.timeout) {
+        await store.receive(\.onError, .timeout) {
             $0.isLoading = false
             $0.destination = .error(.timeout)
         }
@@ -151,7 +155,7 @@ final class BehavioralBiometricAgreementsReducerTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func makeAgreement(
+    private static func makeAgreement(
         id: String,
         textConsentId: String,
         mandatory: Bool
