@@ -1,17 +1,21 @@
 @testable import BehavioralBiometric
 import Behex
 import ComposableArchitecture
-import XCTest
+import Testing
 
-@MainActor
-final class BehavioralBiometricFAQReducerTests: XCTestCase {
-    func test_onAppear_registersBehexEvent_andDoesNotChangeState() async {
+struct BehavioralBiometricFAQReducerTests {
+
+    @Test
+    @MainActor
+    func onAppear_registersBehexEvent_andDoesNotChangeState() async {
         let store = makeStore()
 
         await store.send(.onAppear)
     }
 
-    func test_onQuestionTap_setsExpandedId() async {
+    @Test
+    @MainActor
+    func onQuestionTap_setsExpandedId() async {
         let store = makeStore()
         let id = UUID()
 
@@ -20,7 +24,9 @@ final class BehavioralBiometricFAQReducerTests: XCTestCase {
         }
     }
 
-    func test_onQuestionTap_withNil_clearsExpandedId() async {
+    @Test
+    @MainActor
+    func onQuestionTap_withNil_clearsExpandedId() async {
         let store = makeStore(expandedId: UUID())
 
         await store.send(.onQuestionTap(nil)) {
@@ -30,6 +36,7 @@ final class BehavioralBiometricFAQReducerTests: XCTestCase {
 
     // MARK: - Helpers
 
+    @MainActor
     private func makeStore(
         expandedId: UUID? = nil,
         behex: Behex = BehavioralBiometricBehexMock()
