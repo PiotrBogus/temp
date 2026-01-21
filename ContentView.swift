@@ -1,21 +1,27 @@
 @testable import BehavioralBiometric
 import Behex
 import ComposableArchitecture
-import Testing
+import XCTest
 
-struct BehavioralBiometricFAQReducerTests {
-
-    @Test
-    @MainActor
-    func onAppear_registersBehexEvent_andDoesNotChangeState() async {
+@MainActor
+final class BehavioralBiometricExplanationReducerTests: XCTestCase {
+    func test_turnOnAdditionalSecurityButtonTap_navigatesToAgreements() async {
         let store = makeStore()
 
-        await store.send(.onAppear)
+        await store.send(.onTurnOnAdditionalSecurityButtonTap) {
+            $0.destination = .agreements
+        }
     }
 
-    @Test
-    @MainActor
-    func onQuestionTap_setsExpandedId() async {
+    func test_showAllQuestionsAndAnswersButtonTap_navigatesToFAQ() async {
+        let store = makeStore()
+
+        await store.send(.onShowAllQuestionsAndAnswersButtonTap) {
+            $0.destination = .faq
+        }
+    }
+
+    func test_onQuestionTap_setsExpandedId() async {
         let store = makeStore()
         let id = UUID()
 
@@ -24,9 +30,7 @@ struct BehavioralBiometricFAQReducerTests {
         }
     }
 
-    @Test
-    @MainActor
-    func onQuestionTap_withNil_clearsExpandedId() async {
+    func test_onQuestionTap_withNil_clearsExpandedId() async {
         let store = makeStore(expandedId: UUID())
 
         await store.send(.onQuestionTap(nil)) {
@@ -36,20 +40,21 @@ struct BehavioralBiometricFAQReducerTests {
 
     // MARK: - Helpers
 
-    @MainActor
     private func makeStore(
-        expandedId: UUID? = nil,
-        behex: Behex = BehavioralBiometricBehexMock()
+        isPrimaryButtonVisible: Bool = true,
+        expandedId: UUID? = nil
     ) -> TestStore<
-        BehavioralBiometricFAQReducer.State,
-        BehavioralBiometricFAQReducer.Action
+        BehavioralBiometricExplanationReducer.State,
+        BehavioralBiometricExplanationReducer.Action
     > {
         TestStore(
-            initialState: BehavioralBiometricFAQReducer.State(
+            initialState: BehavioralBiometricExplanationReducer.State(
+                destination: nil,
+                isPrimaryButtonVisible: isPrimaryButtonVisible,
                 expandedId: expandedId
             )
         ) {
-            BehavioralBiometricFAQReducer(behex: behex)
+            BehavioralBiometricExplanationReducer(behex: BehavioralBiometricBehexMock())
         }
     }
 }
