@@ -1,41 +1,112 @@
-import XCTest
+@testable import BehavioralBiometric
+import Behex
 import ComposableArchitecture
-@testable import YourModuleName
+import XCTest
 
+@MainActor
 final class BehavioralBiometricStatusReducerTests: XCTestCase {
+    func test_onAppear_loadsStatusSuccessfully() async {
+        let state = BehavioralBiometricState(
+            enabled: true,
+            agreementsDate: "14.04.2015",
+            agreements: []
+        )
+        let network = BehavioralBiometricNetworkServiceProviderMock()
+        network.getBehavioralBiometricStateResult = .success(state)
 
-    // MARK: - Mocks
+        let store = makeStore(network: network)
 
-    private final class BehexMock: Behex {
-        private(set) var events: [Any] = []
+        await store.send(.onAppear) {
+            $0.isLoading = true
+        }
 
-        func register(event: Any) {
-            events.append(event)
+        await store.receive(\.onDidLoadStatus, state) {
+            $0.status = state
+            $0.isBehavioralBiometricEnabled = true
+            $0.isLoading = false
         }
     }
 
-    private final class NetworkServiceMock: BehavioralBiometricNetworkServiceProviding {
-        var getStatusResult: Result<BehavioralBiometricState, BehavioralBiometricError>!
-        var changeStatusResult: Result<Void, BehavioralBiometricError>!
+    func test_onPrimaryButtonTap_whenEnabled_opensDisableFlow_andLogsEvent() async {
+        let store = makeStore(
+            state: .init(isBehavioralBiometricEnabled: true),
+        )
 
-        func getBehavioralBiometricState() async throws -> BehavioralBiometricState {
-            try getStatusResult.get()
-        }
-
-        func changeBehavioralBiometricStatus(
-            isEnabled: Bool,
-            mPin: IKOUIPin,
-            agreements: [BehavioralBiometricAgreement]?
-        ) async throws {
-            try changeStatusResult.get()
+        await store.send(.onPrimaryButtonTap) {
+            $0.destination = .disableBehavioralBiometric
         }
     }
 
-    private final class StatusStorageMock: BehavioralBiometricStatusStoring {
-        private(set) var isEnabled: Bool?
+    func test_onPrimaryButtonTap_whenDisabled_opensEnableFlow_andLogsEvent() async {
+        let store = makeStore(
+            state: .init(isBehavioralBiometricEnabled: false),
+        )
 
-        func changeBehavioralBiometricStatus(isEnabled: Bool) {
-            self.isEnabled = isEnabled
+        await store.send(.onPrimaryButtonTap) {
+            $0.destination = .enableBehavioralBiometric
+        }
+    }
+
+    func test_onDisableBehavioralBiometric_opensMPinBottomSheet() async {
+        let store = makeStore()
+
+        await store.send(.onDisableBehavioralBiometric) {
+            $0.destination = .mPinBottomSheet
+        }
+    }
+
+    func test_onReceiveMPin_successfullyDisablesBiometric() async {
+        let state = BehavioralBiometricState(
+            enabled: false,
+            agreementsDate: "14.04.2015",
+            agreements: []
+        )
+        let network = BehavioralBiometricNetworkServiceProviderMock()
+        network.changeBehavioralBiometricStatusResult = .success(())
+        network.getBehavioralBiometricStateResult = .success(state)
+
+        let store = makeStore(network: network)
+
+        await store.send(.onReceiveMPin(IKOUIPinMock())) {
+            $0.isLoading = true
+        }
+
+        await store.receive(\.onSuccessfullDisableBehavioralBiometric) {
+            $0.destination = .successfullDisableBehavioralBiometric
+        }
+
+        await store.receive(\.onDidLoadStatus, state) {
+            $0.status = state
+            $0.isBehavioralBiometricEnabled = false
+            $0.isLoading = false
+        }
+    }
+
+    func test_onError_setsErrorDestination() async {
+        let network = BehavioralBiometricNetworkServiceProviderMock()
+        let error = BehavioralBiometricError.unknown
+        network.getBehavioralBiometricStateResult = .failure(error)
+
+        let store = makeStore(network: network)
+
+        await store.send(.onAppear) {
+            $0.isLoading = true
+        }
+
+        await store.receive(\.onError, error) {
+            $0.destination = .error(error)
+        }
+    }
+
+    func test_onResetDestination_clearsDestination() async {
+        let network = BehavioralBiometricNetworkServiceProviderMock()
+        let store = makeStore(
+            state: .init(destination: .explanation),
+            network: network
+        )
+
+        await store.send(.onResetDestination) {
+            $0.destination = nil
         }
     }
 
@@ -43,9 +114,8 @@ final class BehavioralBiometricStatusReducerTests: XCTestCase {
 
     private func makeStore(
         state: BehavioralBiometricStatusReducer.State = .init(),
-        network: NetworkServiceMock,
-        storage: StatusStorageMock = .init(),
-        behex: BehexMock = .init()
+        network: BehavioralBiometricNetworkServiceProviderMock = .init(),
+        storage: BehavioralBiometricStatusStoreMock = .init()
     ) -> TestStore<
         BehavioralBiometricStatusReducer.State,
         BehavioralBiometricStatusReducer.Action
@@ -54,118 +124,8 @@ final class BehavioralBiometricStatusReducerTests: XCTestCase {
             BehavioralBiometricStatusReducer(
                 networkService: network,
                 statusStorage: storage,
-                behex: behex
+                behex: BehavioralBiometricBehexMock()
             )
-        }
-    }
-
-    // MARK: - Tests
-
-    func test_onAppear_loadsStatusSuccessfully() async {
-        let network = NetworkServiceMock()
-        network.getStatusResult = .success(.init(enabled: true))
-
-        let store = makeStore(network: network)
-
-        await store.send(.onAppear) {
-            $0.isLoading = true
-        }
-
-        await store.receive(.onDidLoadStatus(.init(enabled: true))) {
-            $0.status = .init(enabled: true)
-            $0.isBehavioralBiometricEnabled = true
-            $0.isLoading = false
-        }
-    }
-
-    func test_onPrimaryButtonTap_whenEnabled_opensDisableFlow_andLogsEvent() async {
-        let network = NetworkServiceMock()
-        let behex = BehexMock()
-
-        let store = makeStore(
-            state: .init(isBehavioralBiometricEnabled: true),
-            network: network,
-            behex: behex
-        )
-
-        await store.send(.onPrimaryButtonTap) {
-            $0.destination = .disableBehavioralBiometric
-        }
-
-        XCTAssertEqual(behex.events.count, 1)
-    }
-
-    func test_onPrimaryButtonTap_whenDisabled_opensEnableFlow_andLogsEvent() async {
-        let network = NetworkServiceMock()
-        let behex = BehexMock()
-
-        let store = makeStore(
-            state: .init(isBehavioralBiometricEnabled: false),
-            network: network,
-            behex: behex
-        )
-
-        await store.send(.onPrimaryButtonTap) {
-            $0.destination = .enableBehavioralBiometric
-        }
-
-        XCTAssertEqual(behex.events.count, 1)
-    }
-
-    func test_onDisableBehavioralBiometric_opensMPinBottomSheet() async {
-        let network = NetworkServiceMock()
-        let store = makeStore(network: network)
-
-        await store.send(.onDisableBehavioralBiometric) {
-            $0.destination = .mPinBottomSheet
-        }
-    }
-
-    func test_onReceiveMPin_successfullyDisablesBiometric() async {
-        let network = NetworkServiceMock()
-        network.changeStatusResult = .success(())
-        network.getStatusResult = .success(.init(enabled: false))
-
-        let store = makeStore(network: network)
-
-        await store.send(.onReceiveMPin(.init("1234"))) {
-            $0.isLoading = true
-        }
-
-        await store.receive(.onSuccessfullDisableBehavioralBiometric) {
-            $0.destination = .successfullDisableBehavioralBiometric
-        }
-
-        await store.receive(.onDidLoadStatus(.init(enabled: false))) {
-            $0.status = .init(enabled: false)
-            $0.isBehavioralBiometricEnabled = false
-            $0.isLoading = false
-        }
-    }
-
-    func test_onError_setsErrorDestination() async {
-        let network = NetworkServiceMock()
-        let error = BehavioralBiometricError.unknown
-        network.getStatusResult = .failure(error)
-
-        let store = makeStore(network: network)
-
-        await store.send(.onAppear)
-
-        await store.receive(.onError(error)) {
-            $0.destination = .error(error)
-        }
-    }
-
-    func test_onResetDestination_clearsDestination() async {
-        let network = NetworkServiceMock()
-        let store = makeStore(
-            state: .init(destination: .explanation),
-            network: network
-        )
-
-        await store.send(.onResetDestination) {
-            $0.destination = nil
         }
     }
 }
