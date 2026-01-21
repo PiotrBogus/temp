@@ -1,59 +1,88 @@
-@preconcurrency import Behex
+import XCTest
 import ComposableArchitecture
-import Foundation
+@testable import YourModuleName
 
-@Reducer
-struct BehavioralBiometricExplanationReducer: Sendable {
-    @ObservableState
-    struct State: Sendable {
-        var destination: Destination?
-        let isPrimaryButtonVisible: Bool
-        let questionsAndAnswersItems: [BehavioralBiometricQuestionAndAnswerItem] = BehavioralBiometricQuestionAndAnswerItem.explanation
+final class BehavioralBiometricExplanationReducerTests: XCTestCase {
 
-        var expandedId: UUID?
+    // MARK: - Behex Mock
+
+    private final class BehexMock: Behex {
+        private(set) var registeredEvents: [Any] = []
+
+        func register(event: Any) {
+            registeredEvents.append(event)
+        }
     }
 
-    @CasePathable
-    public enum Destination: Sendable {
-        case faq
-        case agreements
+    // MARK: - Helpers
+
+    private func makeStore(
+        isPrimaryButtonVisible: Bool = true,
+        behex: BehexMock = BehexMock()
+    ) -> TestStore<
+        BehavioralBiometricExplanationReducer.State,
+        BehavioralBiometricExplanationReducer.Action
+    > {
+        TestStore(
+            initialState: BehavioralBiometricExplanationReducer.State(
+                destination: nil,
+                isPrimaryButtonVisible: isPrimaryButtonVisible,
+                expandedId: nil
+            )
+        ) {
+            BehavioralBiometricExplanationReducer(behex: behex)
+        }
     }
 
-    @CasePathable
-    enum Action: Sendable {
-        case onAppear
-        case onTurnOnAdditionalSecurityButtonTap
-        case onShowAllQuestionsAndAnswersButtonTap
-        case onQuestionTap(UUID?)
+    // MARK: - Tests
+
+    func test_onAppear_doesNotChangeState() async {
+        let behex = BehexMock()
+        let store = makeStore(behex: behex)
+
+        await store.send(.onAppear)
+
+        XCTAssertEqual(behex.registeredEvents.count, 1)
+        XCTAssertNil(store.state.destination)
+        XCTAssertNil(store.state.expandedId)
     }
 
-    private let behex: Behex
+    func test_turnOnAdditionalSecurityButtonTap_navigatesToAgreements() async {
+        let behex = BehexMock()
+        let store = makeStore(behex: behex)
 
-    init(behex: Behex) {
-        self.behex = behex
+        await store.send(.onTurnOnAdditionalSecurityButtonTap) {
+            $0.destination = .agreements
+        }
+
+        XCTAssertEqual(behex.registeredEvents.count, 1)
     }
 
-    var body: some Reducer<State, Action> {
-        Reduce { state, action in
-            switch action {
-            case .onAppear:
-                behex.register(event: .BehavioralBiometric_InfoScreen_view_Show)
-                return .none
+    func test_showAllQuestionsAndAnswersButtonTap_navigatesToFAQ() async {
+        let behex = BehexMock()
+        let store = makeStore(behex: behex)
 
-            case .onTurnOnAdditionalSecurityButtonTap:
-                behex.register(event: .BehavioralBiometric_InfoScreen_btn_TurnOn)
-                state.destination = .agreements
-                return .none
+        await store.send(.onShowAllQuestionsAndAnswersButtonTap) {
+            $0.destination = .faq
+        }
 
-            case .onShowAllQuestionsAndAnswersButtonTap:
-                behex.register(event: .BehavioralBiometric_InfoScreen_btn_AllQuestions)
-                state.destination = .faq
-                return .none
+        XCTAssertEqual(behex.registeredEvents.count, 1)
+    }
 
-            case .onQuestionTap(let id):
-                state.expandedId = id
-                return .none
-            }
+    func test_onQuestionTap_setsExpandedId() async {
+        let store = makeStore()
+        let id = UUID()
+
+        await store.send(.onQuestionTap(id)) {
+            $0.expandedId = id
+        }
+    }
+
+    func test_onQuestionTap_withNil_clearsExpandedId() async {
+        let store = makeStore()
+
+        await store.send(.onQuestionTap(nil)) {
+            $0.expandedId = nil
         }
     }
 }
