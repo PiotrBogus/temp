@@ -1,64 +1,139 @@
-import XCTest
+import BehavioralBiometricLogger
+@preconcurrency import Behex
 import ComposableArchitecture
-@testable import YourModuleName
+import Foundation
+@preconcurrency import IKOCommon
+@preconcurrency import UIComponents
 
-final class BehavioralBiometricFAQReducerTests: XCTestCase {
+@Reducer
+struct BehavioralBiometricStatusReducer: Sendable {
+    @ObservableState
+    struct State: Equatable, Sendable {
+        var isLoading = false
+        var status: BehavioralBiometricState?
+        var isBehavioralBiometricEnabled = false
+        var destination: Destination?
+    }
 
-    // MARK: - Behex Mock
+    @CasePathable
+    public enum Destination: Sendable, Equatable {
+        case disableBehavioralBiometric
+        case enableBehavioralBiometric
+        case mPinBottomSheet
+        case error(BehavioralBiometricError)
+        case explanation
+        case successfullDisableBehavioralBiometric
+    }
 
-    private final class BehexMock: Behex {
-        private(set) var registeredEvents: [Any] = []
+    @CasePathable
+    enum Action: Sendable {
+        case onAppear
+        case onDidLoadStatus(BehavioralBiometricState)
+        case onMoreInfoLinkTap
+        case onPrimaryButtonTap
+        case onReceiveMPin(IKOUIPin)
+        case onDisableBehavioralBiometric
+        case onSuccessfullDisableBehavioralBiometric
+        case onError(BehavioralBiometricError)
+        case onTryAgain
+        case onResetDestination
+    }
 
-        func register(event: Any) {
-            registeredEvents.append(event)
+    private let networkService: BehavioralBiometricNetworkServiceProviding
+    private let statusStorage: BehavioralBiometricStatusStoring
+    private let behex: Behex
+
+    init(
+        networkService: BehavioralBiometricNetworkServiceProviding,
+        statusStorage: BehavioralBiometricStatusStoring,
+        behex: Behex
+    ) {
+        self.networkService = networkService
+        self.statusStorage = statusStorage
+        self.behex = behex
+    }
+
+    var body: some Reducer<State, Action> {
+        Reduce { state, action in
+            switch action {
+            case .onAppear:
+                state.isLoading = true
+                return loadStatus()
+
+            case .onDidLoadStatus(let status):
+                state.status = status
+                state.isBehavioralBiometricEnabled = status.enabled
+                state.isLoading = false
+                return .none
+
+            case .onMoreInfoLinkTap:
+                state.destination = .explanation
+                return .none
+
+            case .onPrimaryButtonTap:
+                if state.isBehavioralBiometricEnabled {
+                    behex.register(event: .BehavioralBiometric_TurnOffBehavioralBiometricBottomSheet_view_Show)
+                    state.destination = .disableBehavioralBiometric
+                } else {
+                    behex.register(event: .BehavioralBiometric_AgreementsScreen_btn_TurnOn)
+                    state.destination = .enableBehavioralBiometric
+                }
+                return .none
+
+            case .onReceiveMPin(let mPin):
+                state.isLoading = true
+                return disableBehavioralBiometric(mPin: mPin)
+
+            case .onDisableBehavioralBiometric:
+                state.destination = .mPinBottomSheet
+                return .none
+
+            case .onSuccessfullDisableBehavioralBiometric:
+                state.destination = .successfullDisableBehavioralBiometric
+                return loadStatus()
+
+            case .onError(let error):
+                state.destination = .error(error)
+                return .none
+
+            case .onTryAgain:
+                if state.status == nil {
+                    return loadStatus()
+                } else {
+                    state.destination = .mPinBottomSheet
+                    return .none
+                }
+
+            case .onResetDestination:
+                state.destination = nil
+                return .none
+            }
         }
     }
 
-    // MARK: - Helpers
-
-    private func makeStore(
-        behex: BehexMock = BehexMock()
-    ) -> TestStore<
-        BehavioralBiometricFAQReducer.State,
-        BehavioralBiometricFAQReducer.Action
-    > {
-        TestStore(
-            initialState: BehavioralBiometricFAQReducer.State(
-                expandedId: nil
-            )
-        ) {
-            BehavioralBiometricFAQReducer(behex: behex)
+    private func loadStatus() -> Effect<Action> {
+        .run { send in
+            do {
+                let status = try await networkService.getBehavioralBiometricState()
+                await send(.onDidLoadStatus(status))
+            } catch let error as BehavioralBiometricError {
+                await send(.onError(error))
+            }
         }
     }
 
-    // MARK: - Tests
-
-    func test_onAppear_registersBehexEvent_andDoesNotChangeState() async {
-        let behex = BehexMock()
-        let store = makeStore(behex: behex)
-
-        let initialState = store.state
-
-        await store.send(.onAppear)
-
-        XCTAssertEqual(behex.registeredEvents.count, 1)
-        XCTAssertEqual(store.state, initialState)
-    }
-
-    func test_onQuestionTap_setsExpandedId() async {
-        let store = makeStore()
-        let id = UUID()
-
-        await store.send(.onQuestionTap(id)) {
-            $0.expandedId = id
-        }
-    }
-
-    func test_onQuestionTap_withNil_clearsExpandedId() async {
-        let store = makeStore()
-
-        await store.send(.onQuestionTap(nil)) {
-            $0.expandedId = nil
+    private func disableBehavioralBiometric(mPin: IKOUIPin) -> Effect<Action> {
+        .run { send in
+            do {
+                try await networkService.changeBehavioralBiometricStatus(
+                    isEnabled: false,
+                    mPin: mPin,
+                    agreements: nil
+                )
+                await send(.onSuccessfullDisableBehavioralBiometric)
+            } catch let error as BehavioralBiometricError {
+                await send(.onError(error))
+            }
         }
     }
 }
