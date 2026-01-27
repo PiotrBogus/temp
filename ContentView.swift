@@ -1,10 +1,101 @@
+@testable import Authorization
+import Dependencies
+import Testing
+
+@Suite("Logout operations performer tests")
+struct LogoutOperationsPerformerTests {
+    let sut = LogoutOperationsPerformer.liveValue
+
+    @Test("When invoking perform, it should do all necessary operations")
+    // swiftlint:disable:next function_body_length
+    func perform() {
+        let storeAnalyticsEventsInvokedCount = LockIsolated(0)
+        let blikResetInvokedCount = LockIsolated(0)
+        let openBankingResetInvokedCount = LockIsolated(0)
+        let mobileAuthorizationResetInvokedCount = LockIsolated(0)
+        let closedAdvertsOfferDataInvokedCount = LockIsolated(0)
+        let offersSessionDataClearInvokedCount = LockIsolated(0)
+        let clearContextInvokedCount = LockIsolated(0)
+        let flushUserContextInvokedCount = LockIsolated(0)
+        let talk2IKOConfigurationResetInvokedCount = LockIsolated(0)
+        let cancelAllRequestsInvokedCount = LockIsolated(0)
+        let sessionLoginDateClearInvokedCount = LockIsolated(0)
+        let increaseLogoutCounterInvokedCount = LockIsolated(0)
+        let clearStoredSessionIdentifierInvokedCount = LockIsolated(0)
+        let loadEnablersForDefaultContextInvokedCount = LockIsolated(0)
+
+        withDependencies {
+            $0[AnalyticsStore.self].storeAnalyticsEvents = {
+                storeAnalyticsEventsInvokedCount.withValue { $0 += 1 }
+            }
+            $0[BlikResetService.self].reset = {
+                blikResetInvokedCount.withValue { $0 += 1 }
+            }
+            $0[OpenBankingResetService.self].reset = {
+                openBankingResetInvokedCount.withValue { $0 += 1 }
+            }
+            $0[MobileAuthorizationResetService.self].reset = {
+                mobileAuthorizationResetInvokedCount.withValue { $0 += 1 }
+            }
+            $0[ContextClearer.self].clear = {
+                clearContextInvokedCount.withValue { $0 += 1 }
+            }
+            $0[ClosedAdvertsOfferDataClearer.self].clear = {
+                closedAdvertsOfferDataInvokedCount.withValue { $0 += 1 }
+            }
+            $0[OffersSessionDataClearer.self].clear = {
+                offersSessionDataClearInvokedCount.withValue { $0 += 1 }
+            }
+            $0[UserContextFlusher.self].flush = {
+                flushUserContextInvokedCount.withValue { $0 += 1 }
+            }
+            $0[Talk2IKOConfigurationResetService.self].reset = {
+                talk2IKOConfigurationResetInvokedCount.withValue { $0 += 1 }
+            }
+            $0[NetworkRequestCanceller.self].cancelAll = {
+                cancelAllRequestsInvokedCount.withValue { $0 += 1 }
+            }
+            $0[SessionLoginDateClearer.self].clear = {
+                sessionLoginDateClearInvokedCount.withValue { $0 += 1 }
+            }
+            $0[GreetingsLogoutCounter.self].increase = {
+                increaseLogoutCounterInvokedCount.withValue { $0 += 1 }
+            }
+            $0[AnalyticsStore.self].clearStoredSessionIdentifier = {
+                clearStoredSessionIdentifierInvokedCount.withValue { $0 += 1 }
+            }
+            $0[EnablersLoader.self].loadEnablersForDefaultContext = {
+                loadEnablersForDefaultContextInvokedCount.withValue { $0 += 1 }
+            }
+        } operation: {
+            await sut.perform()
+        }
+
+        #expect(storeAnalyticsEventsInvokedCount.value == 1, "It should store all analytics events")
+        #expect(blikResetInvokedCount.value == 1, "It should reset BLIK Manager")
+        #expect(openBankingResetInvokedCount.value == 1, "It should reset Open Banking status tracker")
+        #expect(mobileAuthorizationResetInvokedCount.value == 1, "It should reset Mobile Authorization transaction manager")
+        #expect(clearContextInvokedCount.value == 1, "It should clear current context (MSP, Individual or child)")
+        #expect(closedAdvertsOfferDataInvokedCount.value == 1, "It should clear adverts session data")
+        #expect(offersSessionDataClearInvokedCount.value == 1, "It should clear offers session data")
+        #expect(flushUserContextInvokedCount.value == 1, "It should flush current user context")
+        #expect(talk2IKOConfigurationResetInvokedCount.value == 1, "It should reset Talk 2 IKO configuration")
+        #expect(cancelAllRequestsInvokedCount.value == 1, "It should cancel all requests")
+        #expect(sessionLoginDateClearInvokedCount.value == 1, "It should clear last login date")
+        #expect(increaseLogoutCounterInvokedCount.value == 1, "It should increase logout counter")
+        #expect(clearStoredSessionIdentifierInvokedCount.value == 1, "It should clear stored session identifier")
+        #expect(loadEnablersForDefaultContextInvokedCount.value == 1, "It should load enablers for default context")
+    }
+}
+
+
 import Dependencies
 import DependenciesMacros
 /// Performs all logout related operations (e.g. clearing caches, context, etc).
 @DependencyClient
 public struct LogoutOperationsPerformer: Sendable {
     /// Perform all operations.
-    public var perform: @Sendable () -> Void
+    public var perform: @Sendable () async -> Void
 }
 
 extension LogoutOperationsPerformer: TestDependencyKey {
@@ -28,255 +119,20 @@ extension LogoutOperationsPerformer: DependencyKey {
         @Dependency(GreetingsLogoutCounter.self) var greetingLogoutCounter
         @Dependency(EnablersLoader.self) var enablersLoader
 
-        Task {
-            await behavioralBiometricClearer.clear()
-            analyticsStore.storeAnalyticsEvents()
-            blikResetService.reset()
-            openBankingResetService.reset()
-            mobileAuthorizationResetService.reset()
-            contextClearer.clear()
-            closedAdvertsOfferDataClearer.clear()
-            offersSessionDataClearer.clear()
-            userContextFlusher.flush()
-            talk2IKOConfigurationResetService.reset()
-            networkRequestCanceller.cancelAll()
-            sessionLoginDateClearer.clear()
-            greetingLogoutCounter.increase()
-            analyticsStore.clearStoredSessionIdentifier()
-            enablersLoader.loadEnablersForDefaultContext()
-        }
-    }
-}
-
-
-
-import Assembly
-import Dependencies
-import DependenciesMacros
-import SwinjectAutoregistration
-
-@DependencyClient
-struct BehavioralBiometricClearer {
-    var clear: @Sendable () async -> Void
-}
-
-extension BehavioralBiometricClearer: DependencyKey {
-    static let liveValue = BehavioralBiometricClearer {
-        let clearer: BehavioralBiometricLogoutClearing = IKOAssembler.resolver~>
-        await clearer.clear()
-    }
-}
-
-extension BehavioralBiometricClearer: TestDependencyKey {
-    public static let testValue = BehavioralBiometricClearer(clear: { })
-}
-
-extension DependencyValues {
-    var behavioralBiometricClearer: BehavioralBiometricClearer {
-        get { self[BehavioralBiometricClearer.self] }
-        set { self[BehavioralBiometricClearer.self] = newValue }
-    }
-}
-
-
-import Assembly
-import Authorization
-import BehavioralBiometric
-import BehavioralBiometricLogger
-import SwinjectAutoregistration
-
-final class BehavioralBiometricLogoutClearer: BehavioralBiometricLogoutClearing {
-    private let logger: BehavioralBiometricLogging
-    private let networkProvider: BehavioralBiometricNetworkServiceProviding
-    nonisolated(unsafe) private let featureProvider: FeaturesProviding
-
-    init(
-        logger: BehavioralBiometricLogging = IKOAssembler.resolver~>,
-        networkProvider: BehavioralBiometricNetworkServiceProviding = IKOAssembler.resolver~>,
-        featureProvider: FeaturesProviding = IKOAssembler.resolver~>
-    ) {
-        self.logger = logger
-        self.networkProvider = networkProvider
-        self.featureProvider = featureProvider
-    }
-
-    func clear() async {
-        guard featureProvider.isEnabled(.behavioralBiometricSDK) else {
-            return
-        }
-
-        try? await networkProvider.stopSession()
-        await logger.stopSendingEvents()
-    }
-}
-
-
-
-import BehavioralBiometric
-@preconcurrency import IKOCommon
-import SwinjectAutoregistration
-import UIPinInterface
-
-final class BehavioralBiometricNetworkServiceProvider: BehavioralBiometricNetworkServiceProviding, @unchecked Sendable {
-    private let service: Service
-    private let core: IKOCore
-    private var partnerSessionId: String?
-
-    init(core: IKOCore = IKOAssembler.resolver~>) {
-        self.core = core
-        service = Service(with: CoreNetworking(core: core))
-    }
-
-    func changeBehavioralBiometricStatus(
-        isEnabled: Bool,
-        mPin: IKOUIPin,
-        agreements: [BehavioralBiometricAgreement]?
-    ) async throws {
-        guard let castedPin = mPin as? IKOCorePin else {
-            throw BehavioralBiometricError.pin
-        }
-        try await withCheckedThrowingContinuation { [weak self] continuation in
-            let params = IKOCoreChangeBehavioralBiometricStateParams()
-            params.enabled = isEnabled
-            params.mPin = castedPin
-            params.agreements = agreements?.compactMap {
-                let agreement = IKOCoreBehavioralBiometricApiAgreement()
-                agreement.consentType = $0.consentType
-                agreement.textConsentId = $0.textConsentId
-                agreement.consent = true
-                return agreement
-            }
-
-            let operation = self?.core.requestChangeBehavioralBiometricStateWithParams(params) {
-                continuation.resume()
-            }
-            self?.handleError(for: operation, with: continuation)
-            self?.service.makeRequest(with: operation)
-        }
-    }
-
-    func getBehavioralBiometricAgreements() async throws -> [BehavioralBiometricAgreement] {
-        try await withCheckedThrowingContinuation { [weak self] continuation in
-            let operation = self?.core.requestGetBehavioralBiometricAgreementsWithCompletion { response in
-                guard let response else {
-                    continuation.resume(throwing: BehavioralBiometricError.emptyResponse)
-                    return
-                }
-                let agreements = response.agreements.compactMap {
-                    BehavioralBiometricAgreement(
-                        textConsentId: $0.textConsentId,
-                        consentType: $0.consentType,
-                        textShort: $0.textShort,
-                        textFull: $0.textFull,
-                        isMandatory: $0.mandatory
-                    )
-                }
-                continuation.resume(returning: agreements)
-            }
-            self?.handleError(for: operation, with: continuation)
-            self?.service.makeRequest(with: operation)
-        }
-    }
-
-    func getBehavioralBiometricState() async throws -> BehavioralBiometricState {
-        try await withCheckedThrowingContinuation { [weak self] continuation in
-            let operation = self?.core.requestGetBehavioralBiometricStateWithCompletion { response in
-                guard let response else {
-                    continuation.resume(throwing: BehavioralBiometricError.emptyResponse)
-                    return
-                }
-                continuation.resume(returning: BehavioralBiometricState(
-                    isEnabled: response.enabled,
-                    agreementsDate: response.agreementsDate,
-                    agreements: response.agreements.compactMap {
-                        BehavioralBiometricAgreement(
-                            textConsentId: $0.textConsentId,
-                            consentType: $0.consentType,
-                            textShort: $0.textShort,
-                            textFull: $0.textFull,
-                            isMandatory: $0.mandatory
-                        )
-                    }
-                ))
-            }
-            self?.handleError(for: operation, with: continuation)
-            self?.service.makeRequest(with: operation)
-        }
-    }
-
-    func startSession(latitude: String?, longitude: String?) async throws -> BehavioralBiometricStartSession {
-        guard partnerSessionId == nil else {
-            throw BehavioralBiometricError.sessionInProgress
-        }
-        return try await withCheckedThrowingContinuation { [weak self] continuation in
-            let params = IKOCoreStartBehavioralBiometricSessionParams()
-            params.latitude = latitude
-            params.longitude = longitude
-            params.platform = IKOCoreBehavioralBiometricPlatformIos
-
-            let operation = self?.core.requestStartBehavioralBiometricSessionWithParams(params) { response in
-                guard let response else {
-                    continuation.resume(throwing: BehavioralBiometricError.emptyResponse)
-                    return
-                }
-                self?.partnerSessionId = response.partnerSessionId
-                continuation.resume(returning: BehavioralBiometricStartSession(
-                    isEnabled: response.enabled,
-                    cssId: response.cssId
-                ))
-            }
-            self?.handleError(for: operation, with: continuation)
-            self?.service.makeRequest(with: operation)
-        }
-    }
-
-    func stopSession() async throws {
-        try await withCheckedThrowingContinuation { [weak self] continuation in
-            guard let self,
-                  let partnerSessionId = self.partnerSessionId,
-                  !partnerSessionId.isEmpty else {
-                return continuation.resume()
-            }
-            let params = IKOCoreStopBehavioralBiometricSessionParams()
-            params.partnerSessionId = "partnerSessionId"
-            self.partnerSessionId = nil
-            let operation = self.core.requestStopBehavioralBiometricSessionWithParams(params) {
-                continuation.resume()
-            }
-            self.handleError(for: operation, with: continuation)
-            self.service.makeRequest(with: operation)
-        }
-    }
-
-    private func handleError<T>(
-        for operation: IKOCoreOperation?,
-        with continuation: CheckedContinuation<T, Error>
-    ) {
-        operation?.errorHandler = { coreError in
-            continuation.resume(
-                throwing: BehavioralBiometricError.general(
-                    title: coreError?.errorTitle,
-                    description: coreError?.errorDescription
-                )
-            )
-        }
-
-        operation?.failHandler = { _ in
-            continuation.resume(throwing: BehavioralBiometricError.general(title: nil, description: nil))
-            return false
-        }
-
-        operation?.resultHandler.timeoutHandler = {
-            continuation.resume(throwing: BehavioralBiometricError.timeout)
-        }
-
-        operation?.fieldErrorsHandler = { coreError in
-            continuation.resume(
-                throwing: BehavioralBiometricError.fieldErrors(
-                    title: coreError?.errorTitle,
-                    description: coreError?.errorDescription
-                )
-            )
-        }
+        await behavioralBiometricClearer.clear()
+        analyticsStore.storeAnalyticsEvents()
+        blikResetService.reset()
+        openBankingResetService.reset()
+        mobileAuthorizationResetService.reset()
+        contextClearer.clear()
+        closedAdvertsOfferDataClearer.clear()
+        offersSessionDataClearer.clear()
+        userContextFlusher.flush()
+        talk2IKOConfigurationResetService.reset()
+        networkRequestCanceller.cancelAll()
+        sessionLoginDateClearer.clear()
+        greetingLogoutCounter.increase()
+        analyticsStore.clearStoredSessionIdentifier()
+        enablersLoader.loadEnablersForDefaultContext()
     }
 }
