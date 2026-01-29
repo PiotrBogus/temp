@@ -1,22 +1,11 @@
-    private func getSectionHeaderStyle(section: WatchlistFeature.SectionGroup) -> SectionHeaderView.Style {
+let intersection = Set(section.items.map(\.id))
+    .intersection(store.selectedItems.map(\.id))
 
-        if section.items.allSatisfy { item in
-            store.selectedItems.contains { $0.id == item.id }
-        } {
-            return SectionHeaderView.fullySelectedItems
-        }
-
-        var isEmpty = true
-        if store.selectedItems.forEach { item in
-            if section.items.contains { $0.id == item.id } {
-                isEmpty = false
-                break
-            }
-        }
-
-        if isEmpty {
-            return SectionHeaderView.empty
-        } else {
-            return SectionHeaderView.partialySelectedItems
-        }
-    }
+switch intersection.count {
+case 0:
+    return .empty
+case section.items.count:
+    return .fullySelectedItems
+default:
+    return .partialySelectedItems
+}
