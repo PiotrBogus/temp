@@ -1,62 +1,34 @@
-import Combine
-import AppCompositionData
-import AppCompositionDomain
-import Dependencies
-import DependenciesMacros
-import GenieCommonDomain
-import Network
+static let liveValue = WatchlistFeatureClient(
+    fetchData: {
+        @Dependency(\.watchlistConfigurationRepository) var repository
 
-@DependencyClient
-struct WatchlistFeatureClient: DependencyKey {
-    var fetchData: @Sendable () async throws -> WatchlistFeature.WatchlistData
+        let configuration = try await repository.fetchWatchlistConfiguration()
 
-    var updateData: @Sendable ([Int]) async throws
+        let sections = configuration.watchlistItems.filter { $0.parentId == nil }
+        let items = configuration.watchlistItems.filter { $0.parentId != nil }
 
-    static let liveValue = WatchlistFeatureClient(
-        fetchData: {
-            @Dependency(\.watchlistConfigurationRepository) var repository
+        let selectedIds = Set(configuration.selectedWatchlistItemsIds)
 
-            let configuration = try await repository.fetchWatchlistConfiguration()
-
-            let sectionsItems = configuration.watchlistItems.filter { $0.parentId == nil }
-            let allItemsWithoutSections = configuration.watchlistItems.filter { $0.parentId != nil }
-            let mappedAllItems = allItemsWithoutSections.compactMap { item in
-                let section = sectionsItems.first(where: { $0.id == item.parentId })!
+        func mapItems(_ items: [WatchlistConfigurationItem]) -> [WatchlistFeature.WatchlistItem] {
+            items.compactMap { item in
+                guard let section = sections.first(where: { $0.id == item.parentId }) else {
+                    return nil
+                }
                 return WatchlistFeature.WatchlistItem(
                     id: item.id,
                     name: item.title,
                     section: section.title
                 )
             }
-
-            let visibleItems = allItemsWithoutSections.filter { item in
-                configuration.selectedWatchlistItemsIds.contains { $0 == item.id }
-            }
-            let mappedVisibleItems = visibleItems.compactMap { item in
-                let section = sectionsItems.first(where: { $0.id == item.parentId })!
-                return WatchlistFeature.WatchlistItem(
-                    id: item.id,
-                    name: item.title,
-                    section: section.title
-                )
-            }
-
-            return WatchlistFeature.WatchlistData(
-                allItems: mappedAllItems,
-                visibleItems: mappedVisibleItems
-            )
-        },
-        updateData: {
-            @Dependency(\.watchlistConfigurationRepository) var repository
-
-            try await repository.updateWatchlistConfiguration(visibleWatchlistIds: $0)
         }
-    )
-}
 
-extension DependencyValues {
-    var watchlistFeatureClient: WatchlistFeatureClient {
-        get { self[WatchlistFeatureClient.self] }
-        set { self[WatchlistFeatureClient.self] = newValue }
+        return WatchlistFeature.WatchlistData(
+            allItems: mapItems(items),
+            visibleItems: mapItems(items.filter { selectedIds.contains($0.id) })
+        )
+    },
+    updateData: { ids in
+        @Dependency(\.watchlistConfigurationRepository) var repository
+        try await repository.updateWatchlistConfiguration(visibleWatchlistIds: ids)
     }
-}
+)
