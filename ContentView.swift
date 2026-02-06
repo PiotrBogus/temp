@@ -1,137 +1,132 @@
+import SwiftUI
+import ComposableArchitecture
 
-struct CalendarState: Equatable {
-    var currentDate: Date = Date()
-    var days: [DateValue] = []
-    var holidays: Set<Date> = []
-    
-    var swipeSelection: Int = 1 // 0 = previous, 1 = current, 2 = next
-}
+public struct AlternativeViewScreen: View {
 
+    let store: StoreOf<AlternativeViewFeature>
 
-enum CalendarAction: Equatable {
-    case previousMonth
-    case nextMonth
-    case updateCalendar
-    case swipeChanged(Int)
-}
-
-
-let calendarReducer = Reducer<CalendarState, CalendarAction, CalendarEnvironment> { state, action, env in
-    switch action {
-    case .previousMonth:
-        if let newDate = env.calendar.date(byAdding: .month, value: -1, to: state.currentDate) {
-            state.currentDate = newDate
-            state.swipeSelection = 1
-        }
-        return Effect(value: .updateCalendar)
-
-    case .nextMonth:
-        if let newDate = env.calendar.date(byAdding: .month, value: 1, to: state.currentDate) {
-            state.currentDate = newDate
-            state.swipeSelection = 1
-        }
-        return Effect(value: .updateCalendar)
-
-    case .updateCalendar:
-        state.days = generateMonthDates(for: state.currentDate, calendar: env.calendar, holidays: state.holidays)
-        return .none
-
-    case let .swipeChanged(index):
-        if index == 0 {
-            return Effect(value: .previousMonth)
-        } else if index == 2 {
-            return Effect(value: .nextMonth)
-        }
-        return .none
+    public init(store: StoreOf<AlternativeViewFeature>) {
+        self.store = store
     }
-}
 
+    public var body: some View {
+        WithViewStore(store, observe: { $0 }) { viewStore in
+            VStack(spacing: 0) {
 
-struct CalendarView: View {
-    let store: Store<CalendarState, CalendarAction>
-
-    var body: some View {
-        WithViewStore(self.store) { viewStore in
-            VStack {
-                Text(formattedMonth(viewStore.currentDate))
-                    .font(.title2)
-                    .padding(.top)
-
-                TabView(selection: viewStore.binding(
-                    get: \.swipeSelection,
-                    send: CalendarAction.swipeChanged
-                )) {
-                    ForEach(0..<3) { index in
-                        CalendarMonthView(
-                            date: monthOffset(from: viewStore.currentDate, by: index - 1),
-                            days: generateMonthDates(
-                                for: monthOffset(from: viewStore.currentDate, by: index - 1),
-                                calendar: Calendar.current,
-                                holidays: viewStore.holidays
+                // LISTA
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEachStore(
+                            store.scope(
+                                state: \.items,
+                                action: AlternativeViewFeature.Action.items
                             )
-                        )
-                        .tag(index)
-                    }
-                }
-                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
-                .frame(height: 400)
-            }
-            .onAppear {
-                viewStore.send(.updateCalendar)
-            }
-        }
-    }
-
-    private func formattedMonth(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "LLLL yyyy"
-        return formatter.string(from: date)
-    }
-
-    private func monthOffset(from date: Date, by offset: Int) -> Date {
-        Calendar.current.date(byAdding: .month, value: offset, to: date) ?? date
-    }
-}
-
-
-struct CalendarMonthView: View {
-    let date: Date
-    let days: [DateValue]
-
-    var body: some View {
-        let columns = Array(repeating: GridItem(.flexible()), count: 7)
-
-        VStack(spacing: 10) {
-            LazyVGrid(columns: columns, spacing: 10) {
-                ForEach(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], id: \.self) { day in
-                    Text(day)
-                        .font(.caption)
-                        .frame(maxWidth: .infinity)
-                }
-
-                ForEach(days) { dateVal in
-                    VStack(spacing: 4) {
-                        Text(dateVal.day == -1 ? "" : "\(dateVal.day)")
-                            .frame(width: 30, height: 30)
-                            .background(isToday(dateVal.date) ? Color.blue : Color.clear)
-                            .clipShape(Circle())
-                            .foregroundColor(dateVal.day == -1 ? .clear : .primary)
-
-                        if dateVal.isHoliday {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 6, height: 6)
-                        } else {
-                            Spacer().frame(height: 6)
+                        ) { itemStore in
+                            AlternativeItemRowView(store: itemStore)
                         }
                     }
+                    .padding(.top, 12)
+                }
+
+                Divider()
+
+                // SEARCH
+                searchBar
+            }
+            .navigationTitle("Watchlist Filter")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        viewStore.send(.dismiss)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                }
+
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        viewStore.send(.delegate(.dismiss))
+                    } label: {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 16, weight: .bold))
+                    }
                 }
             }
-            .padding()
+            .onAppear {
+                viewStore.send(.onFirstAppear)
+            }
         }
     }
 
-    private func isToday(_ date: Date) -> Bool {
-        Calendar.current.isDateInToday(date)
+    private var searchBar: some View {
+        HStack {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(.gray)
+
+            Text("Search Watchlist")
+                .foregroundColor(.gray)
+
+            Spacer()
+
+            Image(systemName: "mic.fill")
+                .foregroundColor(.gray)
+        }
+        .padding()
+        .background(Color(.systemGray6))
+    }
+}
+
+
+
+struct AlternativeItemRowView: View {
+
+    let store: StoreOf<AlternativeItemFeature>
+
+    var body: some View {
+        WithViewStore(store, observe: { $0 }) { viewStore in
+            VStack(alignment: .leading, spacing: 0) {
+
+                Button {
+                    viewStore.send(.didTapItem(id: viewStore.id))
+                } label: {
+                    HStack(spacing: 8) {
+
+                        IndentationView(
+                            level: viewStore.level,
+                            isExpandable: viewStore.isPossibleToExpand,
+                            isExpanded: viewStore.isExpanded,
+                            isSelected: viewStore.isSelected
+                        )
+
+                        Text(viewStore.title)
+                            .foregroundColor(.primary)
+                            .font(.system(size: 15))
+
+                        Spacer()
+                    }
+                    .padding(.vertical, 10)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                // DZIECI
+                if viewStore.isExpanded {
+                    ForEachStore(
+                        store.scope(
+                            state: \.identifiedArrayOfChildrens,
+                            action: AlternativeItemFeature.Action.children
+                        )
+                    ) { childStore in
+                        AlternativeItemRowView(store: childStore)
+                    }
+                }
+
+                Divider()
+            }
+            .onAppear {
+                viewStore.send(.onAppear)
+            }
+        }
     }
 }
