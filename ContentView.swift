@@ -1,30 +1,23 @@
-struct IndentationView: View {
+    @ViewBuilder
+    private var searchBar: some View {
+        HStack {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(Color.secondary)
 
-    let level: Int
-    let isExpandable: Bool
-    let isExpanded: Bool
-    let isSelected: Bool
+            TextField(
+                "Search items...",
+                text: $store.searchText.sending(\.searchTextChanged)
+            )
+            .textFieldStyle(RoundedBorderTextFieldStyle())
 
-    var body: some View {
-        HStack(spacing: 6) {
-
-            // pionowe linie
-            ForEach(0..<level, id: \.self) { _ in
-                Rectangle()
-                    .fill(Color.gray.opacity(0.3))
-                    .frame(width: 1)
-            }
-
-            // ikonka
-            if isExpandable {
-                Image(systemName: isExpanded ? "minus.circle" : "plus.circle")
-                    .foregroundColor(.gray)
-            } else {
-                Circle()
-                    .fill(isSelected ? Color.red : Color.gray.opacity(0.3))
-                    .frame(width: 10, height: 10)
+            if !store.searchText.isEmpty {
+                Button {
+//                    store.send(.clearSearch)
+                }, label: {
+                    Image(systemName: "mic.fill")
+                        .foregroundColor(.gray)
+                }
+                .foregroundColor(.accentColor)
             }
         }
-        .frame(minWidth: 20, alignment: .leading)
     }
-}
