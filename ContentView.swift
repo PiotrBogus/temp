@@ -1,232 +1,115 @@
-import GenieCommonDomain
-import ComposableArchitecture
-import Foundation
 import SwiftUI
+import ComposableArchitecture
 
-@Reducer
-public struct AlternativeViewFeature: Sendable {
-    public init() {}
+struct AlternativeItemView: View {
+    @Bindable var store: StoreOf<AlternativeItemFeature>
 
-    @ObservableState
-    public struct State: Equatable, Sendable {
-        @Presents var error: ErrorFeature.State?
-
-        var searchText: String = ""
-        var isLoading: Bool = false
-        var isOn: Bool = true
-        var items: IdentifiedArrayOf<AlternativeItemFeature.State> = []
-        var allItems: IdentifiedArrayOf<AlternativeItemFeature.State> = []
-    }
-
-    public enum Action: Sendable, Equatable {
-        case delegate(Delegate)
-        case onFirstAppear
-        case dismiss
-        case items(IdentifiedActionOf<AlternativeItemFeature>)
-        case didLoadItems([AlternativeItemFeature.State])
-        case onError(ErrorFeature.State)
-        case error(ErrorFeature.Action)
-        case searchTextChanged(String)
-        case didFilter(IdentifiedArrayOf<AlternativeItemFeature.State>)
-        case toggleChanged(Bool)
-
-        public enum Delegate: Sendable, Equatable {
-            case dismiss
-            case didSelectItem(Int)
-        }
-    }
-
-    enum CancelID {
-        case filter
-    }
-
-    @Dependency(\.alternativeViewFeatureClient) private var featureClient
-
-    public var body: some Reducer<State, Action> {
-        Reduce { state, action in
-            switch action {
-            case .delegate:
-                return .none
-
-            case .dismiss:
-                return .send(.delegate(.dismiss))
-
-            case let .items(.element(id: _, action: .delegate(.didTapItem(tapModel)))):
-                if tapModel.isExpand {
-                    keepAncestorsAndCollapseOthers(expandedId: tapModel.id, in: &state.items)
-                    return .none
-                } else {
-                    deselectAllItems(beside: tapModel.id, in: &state.items)
-                    return .send(.delegate(.didSelectItem(tapModel.id)))
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                IndentationView(
+                    level: store.level,
+                    isExpandable: store.isPossibleToExpand,
+                    isExpanded: store.isExpanded,
+                    isSelected: store.isSelected,
+                    isDisabled: store.isDisabled
+                )
+                .onTapGesture {
+                    store.send(.didExpandItem(id: store.id))
                 }
 
-            case .items:
-                return .none
-
-            case .onFirstAppear:
-                state.isLoading = true
-                return loadData()
-
-            case .didLoadItems(let newItems):
-                state.isLoading = false
-                state.allItems = IdentifiedArrayOf(uniqueElements: newItems)
-                state.items = IdentifiedArrayOf(uniqueElements: newItems)
-                return .none
-
-            case let .onError(error):
-                state.isLoading = false
-                state.error = error
-                return .none
-
-            case .error(.delegate(.retry)):
-                state.error = nil
-                state.isLoading = true
-                return loadData()
-
-            case .error:
-                return .none
-
-            case let .searchTextChanged(text):
-                guard text != state.searchText else {
-                    return .none
+                VStack {
+                    Spacer()
+                    HStack(spacing: .zero) {
+                        Text(store.title)
+                            .font(.body)
+                            .fontWeight(store.isSelected ? .bold : .regular)
+                            .disabled(store.isDisabled)
+                        Spacer()
+                    }
+                    Spacer()
                 }
-                
-                state.searchText = text
-                guard !text.isEmpty else {
-                    return .send(.didFilter(state.allItems))
+                .overlay(
+                    Rectangle()
+                        .fill(Color.separator)
+                        .frame(height: 1),
+                    alignment: .bottom
+                )
+                .onTapGesture {
+                    store.send(.didTapItem(id: store.id))
                 }
+            }
+            .contentShape(Rectangle())
 
-                return performFilter(with: text, allItems: state.allItems)
-                    .debounce(
-                        id: CancelID.filter,
-                        for: .milliseconds(300),
-                        scheduler: RunLoop.main
+            if store.isExpanded {
+                ForEachStore(
+                    store.scope(
+                        state: \.identifiedArrayOfChildrens,
+                        action: \.children
                     )
-
-            case let .didFilter(items):
-                state.items = items
-                return .none
-
-
-            case let .toggleChanged(isOn):
-                state.isOn = isOn
-                state.searchText = ""
-                state.items = disableAllTopItems(items: &state.allItems, isDisabled: !isOn)
-
-                return .none
-            }
-        }
-        .forEach(\.items, action: \.items) {
-            AlternativeItemFeature()
-        }
-    }
-
-    private func deselectAllItems(
-        beside id: Int,
-        in items: inout IdentifiedArrayOf<AlternativeItemFeature.State>
-    ) {
-        for index in items.indices {
-            items[index].isSelected = items[index].id == id
-            deselectAllItems(beside: id, in: &items[index].identifiedArrayOfChildrens)
-        }
-    }
-
-    @discardableResult
-    private func keepAncestorsAndCollapseOthers(
-        expandedId: Int,
-        in items: inout IdentifiedArrayOf<AlternativeItemFeature.State>
-    ) -> Bool {
-        var found = false
-        for index in items.indices {
-            if items[index].id == expandedId {
-                found = true
-                keepAncestorsAndCollapseOthers(
-                    expandedId: expandedId,
-                    in: &items[index].identifiedArrayOfChildrens
-                )
-            } else {
-                let childHasExpanded = keepAncestorsAndCollapseOthers(
-                    expandedId: expandedId,
-                    in: &items[index].identifiedArrayOfChildrens
-                )
-
-                if childHasExpanded {
-                    items[index].isExpanded = true
-                    found = true
-                } else {
-                    items[index].isExpanded = false
+                ) { childStore in
+                    AlternativeItemView(store: childStore)
                 }
             }
         }
-
-        return found
-    }
-
-    private func loadData() -> Effect<Action> {
-        return .run { send in
-            do {
-                let alternativeViewEntity = try await featureClient.fetchAlternativeViewEntity()
-                let tree = featureClient.buildTree(alternativeViewEntity.items, alternativeViewEntity.defaultValueId)
-                await send(.didLoadItems(tree))
-            } catch {
-                await send(.onError(.build(from: error)))
-            }
+        .onAppear {
+            store.send(.onAppear)
         }
     }
+}
 
-    private func performFilter(
-        with text: String,
-        allItems: IdentifiedArrayOf<AlternativeItemFeature.State>
-    ) -> Effect<Action> {
-        return .run { send in
-            let filteredItems = await Task.detached(priority: .userInitiated) {
-                let filteredItems = filterTree(
-                    items: allItems,
-                    searchText: text.lowercased()
-                )
-                return filteredItems
-            }.value
 
-            await send(.didFilter(filteredItems))
-        }
-    }
+private struct IndentationView: View {
+    let level: Int
+    let isExpandable: Bool
+    let isExpanded: Bool
+    let isSelected: Bool
+    let isDisabled: Bool
 
-    private func filterTree(
-        items: IdentifiedArrayOf<AlternativeItemFeature.State>,
-        searchText: String
-    ) -> IdentifiedArrayOf<AlternativeItemFeature.State> {
+    var body: some View {
+        VStack(spacing: .zero) {
+            Rectangle()
+                .fill(level > 0 ? Color.separator : Color.clear)
+                .frame(width: 1, height: 14)
+                .padding(.bottom, 2)
 
-        var results: [AlternativeItemFeature.State] = []
-
-        func collectMatching(_ item: AlternativeItemFeature.State) {
-            let titleMatches = item.title.lowercased().contains(searchText)
-
-            if titleMatches {
-                var matchedItem = item
-                matchedItem.children = item.children
-                matchedItem.identifiedArrayOfChildrens = IdentifiedArrayOf(uniqueElements: item.children)
-                matchedItem.isExpanded = true
-                results.append(matchedItem)
+            if isExpandable {
+                Image(systemName: isExpanded ? "minus.circle" : "plus.circle")
+                    .foregroundColor(prepareColor())
+                    .frame(width: 20, height: 20)
+                    .disabled(isDisabled)
             } else {
-                for child in item.children {
-                    collectMatching(child)
+                VStack {
+                    Circle()
+                        .fill(prepareColor())
+                        .frame(width: 14, height: 14)
+                        .disabled(isDisabled)
                 }
+                .frame(width: 20, height: 20)
             }
+            Rectangle()
+                .fill(level > 0 || (level == 0 && isExpanded) ? Color.separator : Color.clear)
+                .frame(width: 1, height: 14)
+                .padding(.top, 2)
         }
-
-        for item in items {
-            collectMatching(item)
-        }
-
-        return IdentifiedArrayOf(uniqueElements: results)
     }
 
-    private func disableAllTopItems(
-        items: inout IdentifiedArrayOf<AlternativeItemFeature.State>,
-        isDisabled: Bool
-    ) {
-        for index in items.indices {
-            items[index].isDisabled = isDisabled
+    private func prepareColor() -> Color {
+        switch level {
+        case 0:
+            Color(uiColor: .bluePrimary)
+        case 1:
+            Color(hex: 0x8d1f1b)
+        case 2:
+            Color(hex: 0xe74a21)
+        case 3:
+            Color(hex: 0xFCB13B)
+        case 4:
+            Color(hex: 0x6ad545)
+        case 5:
+            Color(hex: 0x45d5b1)
+        default:
+            Color.random()
         }
     }
 }
