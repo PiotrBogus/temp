@@ -6,18 +6,20 @@ private func filterTree(
     var results: [AlternativeItemFeature.State] = []
     
     func collectMatching(_ item: AlternativeItemFeature.State) {
-        // Sprawdź czy ten node pasuje
-        if item.title.lowercased().contains(searchText) {
-            var matchedItem = item
-            matchedItem.isExpanded = false
-            matchedItem.children = []
-            matchedItem.identifiedArrayOfChildrens = []
-            results.append(matchedItem)
-        }
+        let titleMatches = item.title.lowercased().contains(searchText)
         
-        // Rekurencyjnie sprawdź dzieci
-        for child in item.children {
-            collectMatching(child)
+        if titleMatches {
+            // Parent pasuje - dodaj go z wszystkimi dziećmi
+            var matchedItem = item
+            matchedItem.children = item.children
+            matchedItem.identifiedArrayOfChildrens = IdentifiedArrayOf(uniqueElements: item.children)
+            matchedItem.isExpanded = true
+            results.append(matchedItem)
+        } else {
+            // Parent NIE pasuje - sprawdź dzieci i dodaj je bezpośrednio
+            for child in item.children {
+                collectMatching(child)
+            }
         }
     }
     
