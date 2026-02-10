@@ -1,72 +1,29 @@
-private func performFilter(
-    with text: String,
-    allItems: IdentifiedArrayOf<AlternativeItemFeature.State>
-) -> Effect<Action> {
-    return .run { send in
-        // Wykonaj filtrowanie asynchronicznie
-        let filteredItems: IdentifiedArrayOf<AlternativeItemFeature.State>
-        
-        if text.isEmpty {
-            filteredItems = allItems
-        } else {
-            // Filtrowanie w tle
-            filteredItems = await Task {
-                return filterTree(
-                    items: allItems,
-                    searchText: text.lowercased()
-                )
-            }.value
-        }
-        
-        await send(.didFilter(filteredItems))
-    }
-    .debounce(
-        id: CancelID.filter,
-        for: .milliseconds(300),
-        scheduler: DispatchQueue.main
-    )
-}
-
-// Zmień na funkcję statyczną lub globalną, żeby móc jej użyć w Task
 private func filterTree(
     items: IdentifiedArrayOf<AlternativeItemFeature.State>,
     searchText: String
 ) -> IdentifiedArrayOf<AlternativeItemFeature.State> {
     
-    let filtered = items.compactMap { item in
-        filterItem(item, searchText: searchText)
+    var results: [AlternativeItemFeature.State] = []
+    
+    func collectMatching(_ item: AlternativeItemFeature.State) {
+        // Sprawdź czy ten node pasuje
+        if item.title.lowercased().contains(searchText) {
+            var matchedItem = item
+            matchedItem.isExpanded = false
+            matchedItem.children = []
+            matchedItem.identifiedArrayOfChildrens = []
+            results.append(matchedItem)
+        }
+        
+        // Rekurencyjnie sprawdź dzieci
+        for child in item.children {
+            collectMatching(child)
+        }
     }
     
-    return IdentifiedArrayOf(uniqueElements: filtered)
-}
-
-private func filterItem(
-    _ item: AlternativeItemFeature.State,
-    searchText: String
-) -> AlternativeItemFeature.State? {
-    
-    let titleMatches = item.title.lowercased().contains(searchText)
-    
-    let filteredChildren = item.children.compactMap {
-        filterItem($0, searchText: searchText)
+    for item in items {
+        collectMatching(item)
     }
     
-    if titleMatches {
-        var newItem = item
-        // Zostaw wszystkie dzieci gdy tytuł pasuje
-        newItem.children = item.children
-        newItem.identifiedArrayOfChildrens = IdentifiedArrayOf(uniqueElements: item.children)
-        newItem.isExpanded = true
-        return newItem
-    }
-    
-    if !filteredChildren.isEmpty {
-        var newItem = item
-        newItem.children = filteredChildren
-        newItem.identifiedArrayOfChildrens = IdentifiedArrayOf(uniqueElements: filteredChildren)
-        newItem.isExpanded = true
-        return newItem
-    }
-    
-    return nil
+    return IdentifiedArrayOf(uniqueElements: results)
 }
