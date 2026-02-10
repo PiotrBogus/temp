@@ -1,30 +1,24 @@
 private func collapseAndDisableAllItems(
-    in items: inout IdentifiedArrayOf<AlternativeItemFeature.State>,
+    items: IdentifiedArrayOf<AlternativeItemFeature.State>,
     isDisabled: Bool
-) {
-    for index in items.indices {
-        items[index].isExpanded = false
-        items[index].isDisabled = isDisabled
+) -> IdentifiedArrayOf<AlternativeItemFeature.State> {
+    
+    let updatedItems = items.map { item in
+        var updatedItem = item
+        updatedItem.isExpanded = false
+        updatedItem.isDisabled = isDisabled
         
         // Rekurencyjnie przetwórz wszystkie dzieci
-        var children = items[index].identifiedArrayOfChildrens
-        collapseAndDisableAllItems(in: &children, isDisabled: isDisabled)
-        items[index].identifiedArrayOfChildrens = children
+        updatedItem.identifiedArrayOfChildrens = collapseAndDisableAllItems(
+            items: item.identifiedArrayOfChildrens,
+            isDisabled: isDisabled
+        )
         
         // Zaktualizuj też children array
-        items[index].children = Array(children)
+        updatedItem.children = Array(updatedItem.identifiedArrayOfChildrens)
+        
+        return updatedItem
     }
+    
+    return IdentifiedArrayOf(uniqueElements: updatedItems)
 }
-
-
-case let .toggleChanged(isOn):
-    state.isOn = isOn
-    state.searchText = ""
-    
-    // Zwinięcie i ustawienie disabled na WSZYSTKICH elementach (allItems i items)
-    collapseAndDisableAllItems(in: &state.allItems, isDisabled: !isOn)
-    
-    // Przywróć items z zaktualizowanego allItems
-    state.items = state.allItems
-    
-    return .none
