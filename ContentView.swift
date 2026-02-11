@@ -1,115 +1,182 @@
-import SwiftUI
 import ComposableArchitecture
+import SwiftUI
 
-struct AlternativeItemView: View {
-    @Bindable var store: StoreOf<AlternativeItemFeature>
-
+struct WatchlistEditView: View {
+    @Bindable var store: StoreOf<WatchlistFeature>
+    
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                IndentationView(
-                    level: store.level,
-                    isExpandable: store.isPossibleToExpand,
-                    isExpanded: store.isExpanded,
-                    isSelected: store.isSelected,
-                    isDisabled: store.isDisabled
-                )
-                .onTapGesture {
-                    store.send(.didExpandItem(id: store.id))
-                }
+        WatchlistTableView(store: store)
+    }
+}
 
-                VStack {
-                    Spacer()
-                    HStack(spacing: .zero) {
-                        Text(store.title)
-                            .font(.body)
-                            .fontWeight(store.isSelected ? .bold : .regular)
-                            .disabled(store.isDisabled)
-                        Spacer()
-                    }
-                    Spacer()
-                }
-                .overlay(
-                    Rectangle()
-                        .fill(Color.separator)
-                        .frame(height: 1),
-                    alignment: .bottom
-                )
-                .onTapGesture {
-                    store.send(.didTapItem(id: store.id))
-                }
-            }
-            .contentShape(Rectangle())
-
-            if store.isExpanded {
-                ForEachStore(
-                    store.scope(
-                        state: \.identifiedArrayOfChildrens,
-                        action: \.children
-                    )
-                ) { childStore in
-                    AlternativeItemView(store: childStore)
+struct WatchlistTableView: View {
+    @Bindable var store: StoreOf<WatchlistFeature>
+    
+    var body: some View {
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            if store.isLoading {
+                loader
+            } else {
+                if store.groupInCategories {
+                    sectionedTableView
+                } else {
+                    tableView
                 }
             }
         }
         .onAppear {
             store.send(.onAppear)
         }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    store.send(.dismiss)
+                } label: {
+                    Image(systemName: "chevron.backward")
+                        .font(.title3)
+                        .foregroundStyle(Color.xmarkImageGray)
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.circle)
+                .tint(Color.xmarkBackgroundGray)
+            }
+            ToolbarItem(placement: .principal) {
+                Text("Edit Watchlist")
+                    .font(.title3.bold())
+                    .foregroundStyle(Color.mainNavigation)
+            }
+            
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                HStack {
+                    Button(action: {
+                        store.send(.onSynchronize)
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.title3)
+                            .foregroundStyle(Color.xmarkImageGray)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.circle)
+                    .tint(Color.xmarkBackgroundGray)
+
+                    Button {
+                        store.send(.delegate(.pushToAdd))
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.title3)
+                            .foregroundStyle(Color.whitePrimary)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.circle)
+                    .tint(Color.mainNavigation)
+                }
+            }
+        }
+        .navigationBarBackButtonHidden()
+        .tint(Color.accentColor)
+        .overlay {
+            if store.selectedItems.isEmpty && !store.isLoading {
+                EmptyItemsView(hasSearchText: false)
+            }
+        }
+        .alert($store.scope(state: \.error?.alert, action: \.error.alert))
+    }
+
+    @ViewBuilder
+    private var tableView: some View {
+        VStack(spacing: 0) {
+            List {
+                ForEach(store.selectedItems, id: \.id) { item in
+                    cellView(item: item)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color(.systemBackground))
+                        .listRowSeparator(
+                            item == store.selectedItems.last ? .hidden : .visible)
+                }
+                .onMove { source, destination in
+                    store.send(
+                        .moveItems(
+                            source: source,
+                            destination: destination,
+                            section: nil
+                        )
+                    )
+                }
+            }
+            .listStyle(.plain)
+            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            .listSectionSpacing(ListSectionSpacing.custom(0))
+            .environment(\.editMode, $store.editMode.sending(\.setEditMode))
+        }
+    }
+    
+    @ViewBuilder
+    private var sectionedTableView: some View {
+        VStack(spacing: 0) {
+            List {
+                ForEach(store.sectionedSelectedItems, id: \.section) { sectionGroup in
+                    Section(
+                        header: SectionHeaderView(sectionName: sectionGroup.section)
+                    ) {
+                        ForEach(sectionGroup.items, id: \.id) { item in
+                            cellView(item: item)
+                                .listRowInsets(EdgeInsets())
+                                .listRowBackground(Color(.systemBackground))
+                                .listRowSeparator(
+                                    item == sectionGroup.items.last ? .hidden : .visible)
+                        }
+                        .onMove { source, destination in
+                            store.send(
+                                .moveItems(
+                                    source: source,
+                                    destination: destination,
+                                    section: sectionGroup.section
+                                )
+                            )
+                        }
+                    }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                }
+            }
+            .listStyle(.plain)
+            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            .listSectionSpacing(ListSectionSpacing.custom(0))
+            .environment(\.editMode, $store.editMode.sending(\.setEditMode))
+        }
+    }
+
+    @ViewBuilder
+    private func cellView(item: WatchlistFeature.WatchlistItem) -> some View {
+        HStack {
+            CheckmarkView.createCheckedkBlueFilled {
+                store.send(
+                    .removeItem(item))
+            }
+            .padding(.horizontal, 16)
+            
+            Text(item.name)
+                .font(.body)
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+    
+    @ViewBuilder
+    private var loader: some View {
+        ProgressView()
+            .progressViewStyle(.circular)
+            .tint(.white)
+            .frame(height: 44)
     }
 }
 
-
-private struct IndentationView: View {
-    let level: Int
-    let isExpandable: Bool
-    let isExpanded: Bool
-    let isSelected: Bool
-    let isDisabled: Bool
-
-    var body: some View {
-        VStack(spacing: .zero) {
-            Rectangle()
-                .fill(level > 0 ? Color.separator : Color.clear)
-                .frame(width: 1, height: 14)
-                .padding(.bottom, 2)
-
-            if isExpandable {
-                Image(systemName: isExpanded ? "minus.circle" : "plus.circle")
-                    .foregroundColor(prepareColor())
-                    .frame(width: 20, height: 20)
-                    .disabled(isDisabled)
-            } else {
-                VStack {
-                    Circle()
-                        .fill(prepareColor())
-                        .frame(width: 14, height: 14)
-                        .disabled(isDisabled)
-                }
-                .frame(width: 20, height: 20)
-            }
-            Rectangle()
-                .fill(level > 0 || (level == 0 && isExpanded) ? Color.separator : Color.clear)
-                .frame(width: 1, height: 14)
-                .padding(.top, 2)
-        }
-    }
-
-    private func prepareColor() -> Color {
-        switch level {
-        case 0:
-            Color(uiColor: .bluePrimary)
-        case 1:
-            Color(hex: 0x8d1f1b)
-        case 2:
-            Color(hex: 0xe74a21)
-        case 3:
-            Color(hex: 0xFCB13B)
-        case 4:
-            Color(hex: 0x6ad545)
-        case 5:
-            Color(hex: 0x45d5b1)
-        default:
-            Color.random()
-        }
+#Preview("Watchlist Manager") {
+    NavigationView {
+        WatchlistEditView(
+            store: Store(initialState: WatchlistFeature.State()) {
+                WatchlistFeature()
+            })
     }
 }
