@@ -1,34 +1,18 @@
 import ComposableArchitecture
 import SwiftUI
 
-struct WatchlistEditView: View {
+struct WatchlistFilterAddView: View {
     @Bindable var store: StoreOf<WatchlistFeature>
-    
-    var body: some View {
-        WatchlistTableView(store: store)
-    }
-}
 
-struct WatchlistTableView: View {
-    @Bindable var store: StoreOf<WatchlistFeature>
-    
     var body: some View {
-        ZStack {
-            Color(.systemBackground).ignoresSafeArea()
+        VStack(spacing: 0) {
             if store.isLoading {
                 loader
             } else {
-                if store.groupInCategories {
-                    sectionedTableView
-                } else {
-                    tableView
-                }
+                tableView
+                searchBar
             }
         }
-        .onAppear {
-            store.send(.onAppear)
-        }
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button {
@@ -43,126 +27,115 @@ struct WatchlistTableView: View {
                 .tint(Color.xmarkBackgroundGray)
             }
             ToolbarItem(placement: .principal) {
-                Text("Edit Watchlist")
+                Text("Add Watchlist")
                     .font(.title3.bold())
                     .foregroundStyle(Color.mainNavigation)
             }
-            
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                HStack {
-                    Button(action: {
-                        store.send(.onSynchronize)
-                    }) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.title3)
-                            .foregroundStyle(Color.xmarkImageGray)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.circle)
-                    .tint(Color.xmarkBackgroundGray)
-
-                    Button {
-                        store.send(.delegate(.pushToAdd))
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.title3)
-                            .foregroundStyle(Color.whitePrimary)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.circle)
-                    .tint(Color.mainNavigation)
-                }
-            }
         }
         .navigationBarBackButtonHidden()
-        .tint(Color.accentColor)
-        .overlay {
-            if store.selectedItems.isEmpty && !store.isLoading {
-                EmptyItemsView(hasSearchText: false)
-            }
+        .toolbarBackground(Color.whiteBackground, for: .navigationBar)
+        .toolbarBackgroundVisibility(.visible, for: .navigationBar)
+        .onAppear {
+            store.send(.onAppear)
         }
+        .tint(Color.accentColor)
+        .navigationBarTitleDisplayMode(.inline)
+        .background(Color(.whiteBackground).ignoresSafeArea())
         .alert($store.scope(state: \.error?.alert, action: \.error.alert))
     }
 
-    @ViewBuilder
-    private var tableView: some View {
-        VStack(spacing: 0) {
-            List {
-                ForEach(store.selectedItems, id: \.id) { item in
-                    cellView(item: item)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color(.systemBackground))
-                        .listRowSeparator(
-                            item == store.selectedItems.last ? .hidden : .visible)
-                }
-                .onMove { source, destination in
-                    store.send(
-                        .moveItems(
-                            source: source,
-                            destination: destination,
-                            section: nil
-                        )
-                    )
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.body)
+                .foregroundColor(Color.text)
+
+            TextField(
+                "Search Watchlist",
+                text: $store.searchText.sending(\.searchTextChanged)
+            )
+            .font(.body)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+
+            if !store.searchText.isEmpty {
+                Button {
+                    store.send(.clearSearch)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(Color.text)
                 }
             }
-            .listStyle(.plain)
-            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-            .listSectionSpacing(ListSectionSpacing.custom(0))
-            .environment(\.editMode, $store.editMode.sending(\.setEditMode))
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(height: 48)
+        .background(
+            RoundedRectangle(cornerRadius: 24)
+                .fill(Color.grayBackground)
+        )
+        .padding(.horizontal, 26)
     }
-    
-    @ViewBuilder
-    private var sectionedTableView: some View {
-        VStack(spacing: 0) {
-            List {
-                ForEach(store.sectionedSelectedItems, id: \.section) { sectionGroup in
-                    Section(
-                        header: SectionHeaderView(sectionName: sectionGroup.section)
+
+    private var tableView: some View {
+        List {
+            ForEach(store.sectionedAvailableItems, id: \.section) { sectionGroup in
+                let sectionStyle = getSectionHeaderStyle(section: sectionGroup)
+                Section(
+                    header: SectionHeaderView(
+                        sectionName: sectionGroup.section,
+                        style: sectionStyle
                     ) {
-                        ForEach(sectionGroup.items, id: \.id) { item in
-                            cellView(item: item)
-                                .listRowInsets(EdgeInsets())
-                                .listRowBackground(Color(.systemBackground))
-                                .listRowSeparator(
-                                    item == sectionGroup.items.last ? .hidden : .visible)
-                        }
-                        .onMove { source, destination in
-                            store.send(
-                                .moveItems(
-                                    source: source,
-                                    destination: destination,
-                                    section: sectionGroup.section
-                                )
-                            )
-                        }
+                        handleSectionTap(for: sectionStyle, section: sectionGroup)
                     }
-                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                ) {
+                    ForEach(sectionGroup.items, id: \.id) { item in
+                        let inArray = store.selectedItems.contains(where: {
+                            $0.id == item.id
+                        })
+                        cellView(item: item, isAdded: inArray)
+                            .listRowSeparator(
+                                item == sectionGroup.items.last ? .hidden : .visible
+                            )
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(Color(.whiteBackground))
+                    }
                 }
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             }
-            .listStyle(.plain)
-            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-            .listSectionSpacing(ListSectionSpacing.custom(0))
-            .environment(\.editMode, $store.editMode.sending(\.setEditMode))
+        }
+        .listSectionSpacing(ListSectionSpacing.custom(0))
+        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+        .listStyle(.plain)
+        .overlay {
+            if store.availableItems.isEmpty {
+                EmptyItemsView(hasSearchText: !store.searchText.isEmpty)
+            }
         }
     }
 
     @ViewBuilder
-    private func cellView(item: WatchlistFeature.WatchlistItem) -> some View {
+    private func cellView(item: WatchlistFeature.WatchlistItem, isAdded: Bool) -> some View {
         HStack {
-            CheckmarkView.createCheckedkBlueFilled {
-                store.send(
-                    .removeItem(item))
+            if isAdded {
+                CheckmarkView.createCheckedkBlueFilled {
+                    store.send(.removeItem(item))
+                }
+                .padding(.horizontal, 16)
+            } else {
+                CheckmarkView.createUnchecked {
+                    store.send(.addItem(item))
+                }
+                .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 16)
-            
+
             Text(item.name)
                 .font(.body)
             Spacer()
         }
         .padding(.vertical, 4)
     }
-    
+
     @ViewBuilder
     private var loader: some View {
         ProgressView()
@@ -172,9 +145,36 @@ struct WatchlistTableView: View {
     }
 }
 
-#Preview("Watchlist Manager") {
+private extension WatchlistFilterAddView {
+    func getSectionHeaderStyle(section: WatchlistFeature.SectionGroup) -> SectionHeaderView.Style {
+        let intersection = Set(section.items.map(\.id))
+            .intersection(store.selectedItems.map(\.id))
+
+        switch intersection.count {
+        case 0:
+            return .empty
+        case section.items.count:
+            return .fullySelectedItems
+        default:
+            return .partialySelectedItems
+        }
+    }
+
+    func handleSectionTap(for style: SectionHeaderView.Style, section: WatchlistFeature.SectionGroup) {
+        switch style {
+        case .empty:
+            store.send(.addItems(section.items))
+        case .fullySelectedItems, .partialySelectedItems:
+            store.send(.removeItems(section.items))
+        case .noCheckmark:
+            break
+        }
+    }
+}
+
+#Preview {
     NavigationView {
-        WatchlistEditView(
+        WatchlistFilterAddView(
             store: Store(initialState: WatchlistFeature.State()) {
                 WatchlistFeature()
             })
