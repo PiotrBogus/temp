@@ -1,183 +1,54 @@
-import ComposableArchitecture
-import SwiftUI
+import Combine
+import Dependencies
+import DependenciesMacros
+import GenieCommonDomain
+import Network
 
-struct WatchlistEditView: View {
-    @Bindable var store: StoreOf<WatchlistFeature>
-    
-    var body: some View {
-        WatchlistTableView(store: store)
-    }
-}
+@DependencyClient
+struct WatchlistFeatureClient: DependencyKey {
+    var fetchData: @Sendable () async throws -> WatchlistFeature.WatchlistData
+    var updateData: @Sendable ([Int]) async throws -> Void
 
-struct WatchlistTableView: View {
-    @Bindable var store: StoreOf<WatchlistFeature>
-    
-    var body: some View {
-        ZStack {
-            Color(.whiteBackground).ignoresSafeArea()
-            if store.isLoading {
-                loader
-            } else {
-                if store.groupInCategories {
-                    sectionedTableView
-                } else {
-                    tableView
-                }
-            }
-        }
-        .onAppear {
-            store.send(.onAppear)
-        }
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button {
-                    store.send(.dismiss)
-                } label: {
-                    Image(systemName: "chevron.backward")
-                        .font(.title3)
-                        .foregroundStyle(Color.xmarkImageGray)
-                }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.circle)
-                .tint(Color.xmarkBackgroundGray)
-            }
-            ToolbarItem(placement: .principal) {
-                Text("Edit Watchlist")
-                    .font(.title3.bold())
-                    .foregroundStyle(Color.mainNavigation)
-            }
-            
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                HStack {
-                    Button(action: {
-                        store.send(.onSynchronize)
-                    }) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.title3)
-                            .foregroundStyle(Color.xmarkImageGray)
+    static let liveValue = WatchlistFeatureClient(
+        fetchData: {
+            @Dependency(\.watchlistConfigurationRepository) var repository
+
+            let configuration = try await repository.fetchWatchlistConfiguration()
+
+            let sections = configuration.watchlistItems.filter { $0.parentId == nil }
+            let items = configuration.watchlistItems.filter { $0.parentId != nil }
+
+            let selectedIds = Set(configuration.selectedWatchlistItemsIds)
+
+            func mapItems(_ items: [WatchlistConfigurationItemEntity]) -> [WatchlistFeature.WatchlistItem] {
+                items.compactMap { item in
+                    guard let section = sections.first(where: { $0.id == item.parentId }) else {
+                        return nil
                     }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.circle)
-                    .tint(Color.xmarkBackgroundGray)
-
-                    Button {
-                        store.send(.delegate(.pushToAdd))
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.title3)
-                            .foregroundStyle(Color.whitePrimary)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.circle)
-                    .tint(Color.mainNavigation)
-                }
-            }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden()
-        .toolbarBackground(Color.whiteBackground, for: .navigationBar)
-        .toolbarBackgroundVisibility(.visible, for: .navigationBar)
-        .overlay {
-            if store.selectedItems.isEmpty && !store.isLoading {
-                WatchlistEmptyView.emptyList
-            }
-        }
-        .alert($store.scope(state: \.error?.alert, action: \.error.alert))
-    }
-
-    @ViewBuilder
-    private var tableView: some View {
-        VStack(spacing: 0) {
-            List {
-                ForEach(store.selectedItems, id: \.id) { item in
-                    cellView(item: item)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.whiteBackground)
-                        .listRowSeparator(
-                            item == store.selectedItems.last ? .hidden : .visible)
-                }
-                .onMove { source, destination in
-                    store.send(
-                        .moveItems(
-                            source: source,
-                            destination: destination,
-                            section: nil
-                        )
+                    return WatchlistFeature.WatchlistItem(
+                        id: item.id,
+                        name: item.title,
+                        section: section.title
                     )
                 }
             }
-            .listStyle(.plain)
-            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-            .listSectionSpacing(ListSectionSpacing.custom(0))
-            .environment(\.editMode, $store.editMode.sending(\.setEditMode))
-        }
-    }
-    
-    @ViewBuilder
-    private var sectionedTableView: some View {
-        VStack(spacing: 0) {
-            List {
-                ForEach(store.sectionedSelectedItems, id: \.section) { sectionGroup in
-                    Section(
-                        header: SectionHeaderView(sectionName: sectionGroup.section)
-                    ) {
-                        ForEach(sectionGroup.items, id: \.id) { item in
-                            cellView(item: item)
-                                .listRowInsets(EdgeInsets())
-                                .listRowBackground(Color.whiteBackground)
-                                .listRowSeparator(
-                                    item == sectionGroup.items.last ? .hidden : .visible)
-                        }
-                        .onMove { source, destination in
-                            store.send(
-                                .moveItems(
-                                    source: source,
-                                    destination: destination,
-                                    section: sectionGroup.section
-                                )
-                            )
-                        }
-                    }
-                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-                }
-            }
-            .listStyle(.plain)
-            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-            .listSectionSpacing(ListSectionSpacing.custom(0))
-            .environment(\.editMode, $store.editMode.sending(\.setEditMode))
-        }
-    }
 
-    @ViewBuilder
-    private func cellView(item: WatchlistFeature.WatchlistItem) -> some View {
-        HStack {
-            CheckmarkView.createCheckedkBlueFilled {
-                store.send(
-                    .removeItem(item))
-            }
-            .padding(.horizontal, 16)
-            
-            Text(item.name)
-                .font(.body)
-            Spacer()
+            return WatchlistFeature.WatchlistData(
+                groupInCategories: configuration.groupInCategories,
+                allItems: mapItems(items),
+                visibleItems: mapItems(items.filter { selectedIds.contains($0.id) })
+            )
+        },
+        updateData: { ids in
+            @Dependency(\.watchlistConfigurationRepository) var repository
+            try await repository.updateWatchlistConfiguration(visibleWatchlistIds: ids)
         }
-        .padding(.vertical, 4)
-    }
-    
-    @ViewBuilder
-    private var loader: some View {
-        ProgressView()
-            .progressViewStyle(.circular)
-            .tint(.white)
-            .frame(height: 44)
-    }
+    )
 }
 
-#Preview("Watchlist Manager") {
-    NavigationView {
-        WatchlistEditView(
-            store: Store(initialState: WatchlistFeature.State()) {
-                WatchlistFeature()
-            })
+extension DependencyValues {
+    var watchlistFeatureClient: WatchlistFeatureClient {
+        get { self[WatchlistFeatureClient.self] }
+        set { self[WatchlistFeatureClient.self] = newValue }
     }
 }
