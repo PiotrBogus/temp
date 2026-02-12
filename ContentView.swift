@@ -52,3 +52,33 @@ extension DependencyValues {
         set { self[WatchlistFeatureClient.self] = newValue }
     }
 }
+
+
+
+import Foundation
+
+public struct WatchlistConfigurationEntity: Equatable, Sendable {
+    public let groupInCategories: Bool
+    public let selectedWatchlistItemsIds: [Int]
+    public let watchlistItems: [WatchlistConfigurationItemEntity]
+
+    public init(groupInCategories: Bool, selectedWatchlistItemsIds: [Int], watchlistItems: [WatchlistConfigurationItemEntity]) {
+        self.groupInCategories = groupInCategories
+        self.selectedWatchlistItemsIds = selectedWatchlistItemsIds
+        self.watchlistItems = watchlistItems
+    }
+}
+
+public struct WatchlistConfigurationItemEntity: Equatable, Identifiable, Sendable {
+    public let id: Int
+    public let parentId: Int?
+    public let defaultOrder: Int
+    public let title: String
+
+    public init(id: Int, parentId: Int?, defaultOrder: Int, title: String) {
+        self.id = id
+        self.parentId = parentId
+        self.defaultOrder = defaultOrder
+        self.title = title
+    }
+}
