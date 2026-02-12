@@ -109,7 +109,7 @@ struct WatchlistFilterAddView: View {
         .listStyle(.plain)
         .overlay {
             if store.availableItems.isEmpty {
-                EmptyItemsView(hasSearchText: !store.searchText.isEmpty)
+                WatchlistEmptyView.emptySearch
             }
         }
     }
